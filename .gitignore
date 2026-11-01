@@ -1,0 +1,20 @@
+# 运行缓存 / 会话
+__pycache__/
+*.py[cod]
+.pytest_cache/
+/tmp/
+*.log
+
+# 数据库（运行时生成，不入库）
+*.db
+*.db-journal
+
+# 截图 / 本地预览
+screenshots/
+.preview/
+
+# 欧冠赛程缓存（运行时拉取）
+data/historical/cl_*.json
+
+# 敏感配置（Streamlit Cloud 用 Secrets 注入，勿入库）
+.streamlit/secrets.toml

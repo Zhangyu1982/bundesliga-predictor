@@ -1,0 +1,41 @@
+{
+  "calibrated": true,
+  "n_team_matches": 1836,
+  "n_fatigue": 144,
+  "n_control": 1250,
+  "min_rest_days": 3,
+  "xG_discount_per_day": 0.005,
+  "xG_discount_max": 0.04,
+  "midweek_window_days": 7,
+  "fatigue_effect_goals_per_match": -0.0399,
+  "mean_rest_gap_days": 1.0,
+  "control_mean_resid_dm": 0.0036,
+  "fatigue_mean_resid_dm": -0.0363,
+  "by_rest_bucket": {
+    "0-2": null,
+    "3-4": {
+      "n": 97,
+      "mean_resid_dm": 0.0939,
+      "mean_actual": 1.72,
+      "mean_exp": 1.89
+    },
+    "5-6": {
+      "n": 369,
+      "mean_resid_dm": -0.033,
+      "mean_actual": 1.49,
+      "mean_exp": 1.76
+    }
+  },
+  "cl_recent_effect": {
+    "n": 134,
+    "mean_resid_dm": -0.5376,
+    "mean_actual": 2.1,
+    "mean_exp": 3.14
+  },
+  "cl_preceding_effect": {
+    "n": 144,
+    "mean_resid_dm": -0.0363,
+    "mean_actual": 2.24,
+    "mean_exp": 2.79
+  }
+}

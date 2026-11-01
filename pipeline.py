@@ -1,0 +1,378 @@
+"""
+预测引擎编排：数据(Provider) → 特征 → 模型 → 规则(R1–R5) → 输出(JSON Schema)。
+P0 新增：Provider 抽象、数据时效透传、确认版实时伤病闸门、无数据轮次降级容错（GBM→DC 基准概率，不抛 500）。
+P1 新增：灌入德甲历史 CSV 重训 Elo + Dixon-Coles + GBM（XGB+LGBM），
+        概率计算由 trainer.ModelBundle（训练产物）承担；历史源驱动真实预测，种子源仍供无网络/演示。
+规则阈值全部取自 config.RULES；不在此硬编码。
+"""
+from __future__ import annotations
+import math
+from datetime import datetime
+from config import RULES, SEASON, ENSEMBLE_WEIGHTS, uncalibrated_thresholds, FATIGUE_RULES, HOME_ADV
+from schema import validate_probs, validate_stage_window
+from data.api_client import resolve_provider
+from data.historical_data import CODE2ENG
+from data.cross_competition import FatigueEngine, CrossElo
+from rules.iteration_rules import IterationRules
+from data_stores.cache import Cache
+import trainer
+
+
+class PredictionPipeline:
+    def __init__(self):
+        self._bundle = trainer.train()      # 训练产物（Elo/DC/GBM），P1 历史数据驱动
+        self.rules = IterationRules()
+        self.cache = Cache()
+        self.provider = resolve_provider()   # 自动选择：实时(token) 或 零密钥种子
+        self.cross_elo = CrossElo(self._model_elo_map())
+
+    # ---------------- 数据链路（P0 验收条件 #1/#3/#4） ----------------
+    def fetch_round(self, round_no: int) -> tuple[list[dict], dict]:
+        """拉取一轮对阵 + 时效元数据。"""
+        fixtures = self.provider.fetch_round(round_no)
+        freshness = self.provider.freshness()
+        meta = {
+            "freshness": freshness,
+            "realtime_injury_available": self.provider.realtime_injury_available,
+            "round_has_data": bool(fixtures),
+            "round_no": round_no,
+        }
+        return fixtures, meta
+
+    def data_freshness_label(self, meta: dict) -> str:
+        """验收条件 #1：数据最后拉取时间 + 缓存标注。"""
+        f = meta.get("freshness", {})
+        cached = f.get("cached", False)
+        label = f"数据最后拉取时间：{f.get('fetched_at','—')}"
+        if cached:
+            label += "（缓存）"
+        return label
+
+    # ---------------- P1 模型预测核心（历史重训产物） ----------------
+    def _eng(self, code: str) -> str:
+        return CODE2ENG.get(code, code)
+
+    def _model_elo_map(self) -> dict:
+        """把训练产物的 Elo（英文名→分）映射到 code→Elo（供跨赛事用）。"""
+        try:
+            b = self._bundle
+            elo = getattr(b, "elo_ratings", None)
+            if not elo:
+                return {}
+            return {code: float(elo.get(eng, 1500))
+                    for code, eng in CODE2ENG.items() if eng in elo}
+        except Exception:
+            return {}
+
+    def _cross_probs_for(self, home_elo: float, away_elo: float,
+                         comp: str = "CL") -> dict:
+        """跨赛事概率：Elo 差 → 泊松得分矩阵（对非德甲对手，GBM/DC 特征不适用）。
+        home_elo/away_elo 已含联赛平均兜底。K 倍率体现赛事强度权重。"""
+        k = self.cross_elo.k_multiplier(comp)
+        diff = ((home_elo - away_elo) + HOME_ADV * k) / 400.0   # Elo logit 差
+        win_elo = 1.0 / (1 + 10 ** (-diff))       # Elo 胜率（主队）
+        # 期望进球随 Elo 差显著拉开（10^(±diff/2)），保证强队 λ 明显更高
+        lam_h = 1.35 * (10 ** (diff / 2.0))
+        lam_a = 1.35 * (10 ** (-diff / 2.0))
+        maxg = 6
+        mat = {}
+        for i in range(maxg + 1):
+            for j in range(maxg + 1):
+                ph = (lam_h ** i) * math.exp(-lam_h) / math.factorial(i)
+                pa = (lam_a ** j) * math.exp(-lam_a) / math.factorial(j)
+                mat[(i, j)] = ph * pa
+        s = sum(mat.values())
+        mat = {k_: v / s for k_, v in mat.items()}
+        home_w = sum(v for (i, j), v in mat.items() if i > j)
+        away_w = sum(v for (i, j), v in mat.items() if i < j)
+        draw = sum(v for (i, j), v in mat.items() if i == j)
+        top2 = sorted(mat.items(), key=lambda kv: -kv[1])[:2]
+        return {
+            "fused": {"home_win": home_w, "draw": draw, "away_win": away_w},
+            "elo": {"home_win": win_elo, "draw": 1 - win_elo, "away_win": 1 - win_elo},
+            "score_top2": [{"score": f"{i}:{j}", "prob": round(p, 3)} for (i, j), p in top2],
+            "lam": {"home": round(lam_h, 2), "away": round(lam_a, 2)},
+        }
+
+    def _probs_for(self, home_code: str, away_code: str,
+                   home_disc: float = 0.0, away_disc: float = 0.0,
+                   inj_shift_h: float = 0.0, inj_shift_a: float = 0.0) -> dict:
+        """由训练产物计算三模型 + 融合概率 + 比分 Top2。
+        home_disc/away_disc：R3 国家队折扣；inj_shift_h/inj_shift_a：R2 伤病偏移（均折入 DC 攻击强度）。"""
+        h, a = self._eng(home_code), self._eng(away_code)
+        b = self._bundle
+        elo = b.elo_prob(h, a)
+        dc = b.dc_prob_discounted(h, a, home_disc + inj_shift_h, away_disc + inj_shift_a)
+        feats = trainer.build_feature_vector(b, h, a)
+        gbm = b.gbm_prob(feats)
+        w = ENSEMBLE_WEIGHTS
+        fused = {
+            "home_win": w["elo"] * elo["home_win"] + w["poisson"] * dc["home_win"]
+                        + (w["xgboost"] + w["lightgbm"]) * gbm["home_win"],
+            "draw": w["elo"] * elo["draw"] + w["poisson"] * dc["draw"]
+                    + (w["xgboost"] + w["lightgbm"]) * gbm["draw"],
+            "away_win": w["elo"] * elo["away_win"] + w["poisson"] * dc["away_win"]
+                        + (w["xgboost"] + w["lightgbm"]) * gbm["away_win"],
+        }
+        s = sum(fused.values())
+        fused = {k: v / s for k, v in fused.items()}
+        matrix = b.dc_score_matrix(h, a, 8, home_disc, away_disc)
+        top2 = sorted(matrix.items(), key=lambda kv: -kv[1])[:2]
+        return {
+            "fused": fused, "elo": elo, "dc": dc, "gbm": gbm,
+            "score_top2": [{"score": f"{i}:{j}", "prob": round(p, 3)} for (i, j), p in top2],
+        }
+
+    # ---------------- 单场预测（含确认版闸门 + 无伤病标注 + 疲劳/跨赛事） ----------------
+    def predict_match(self, match: dict, round_no: int, stage: str = "初版",
+                      is_first_round_after_fifa: bool = False,
+                      realtime_injury_available: bool = False,
+                      fatigue: dict | None = None,
+                      competition: str = "BL1") -> dict:
+        home, away = match["home_team"], match["away_team"]
+        home_code = match.get("home_code", home)
+        away_code = match.get("away_code", away)
+        match_id = match.get("match_id", "")
+        confidence = match.get("confidence", "中")
+
+        # ---------- 验收条件 #3：确认版实时伤病闸门 ----------
+        confirm_blocked = stage == "确认版" and not realtime_injury_available
+        if confirm_blocked:
+            stage = "初版"   # 拦截：零密钥源无实时伤病，无法生成确认版
+
+        # 无伤病数据标注（验收条件 #4 / 风险提示）
+        inj = match.get("injuries", {})
+        injury_lists = [inj.get(k, []) for k in
+                        ("home_key_out", "away_key_out", "home_doubtful", "away_doubtful")]
+        no_injury_data = not any(injury_lists)
+
+        # ---------- 疲劳特征（欧战/杯赛干扰，进 GBM 特征库语义） ----------
+        f = (fatigue or {}).get(match_id) or {}
+        f_home, f_away = f.get("home", {}), f.get("away", {})
+        fatigue_disc_h = f_home.get("fatigue_discount", 0.0)
+        fatigue_disc_a = f_away.get("fatigue_discount", 0.0)
+        cl_preceding_h = bool(f_home.get("cl_preceding"))
+        cl_preceding_a = bool(f_away.get("cl_preceding"))
+
+        # ---------- R3 国家队系数窗口（xG 折扣作用于 DC 本场概率） ----------
+        disc_h = self.rules.xg_discount(self._eng(home_code), is_first_round_after_fifa, 0, 0, match_id)
+        disc_a = self.rules.xg_discount(self._eng(away_code), is_first_round_after_fifa, 0, 0, match_id)
+        # 疲劳 xG 折扣并入（欧战/杯赛休息不足等）
+        disc_h += fatigue_disc_h
+        disc_a += fatigue_disc_a
+
+        # ---------- 初版基准概率（R3+疲劳折扣，无伤病偏移） ----------
+        if competition == "BL1":
+            res = self._probs_for(home_code, away_code, home_disc=disc_h, away_disc=disc_a)
+        else:
+            # 跨赛事：Bundesliga 用模型 Elo，其他联赛对手用联赛平均系数兜底
+            h_elo = self.cross_elo.rating_for(home_code, home)
+            a_elo = self.cross_elo.rating_for(away_code, away)
+            res = self._cross_probs_for(h_elo, a_elo, competition)
+        probs = res["fused"]
+        validate_probs(probs)
+        base_probs = {k: round(v, 3) for k, v in probs.items()}
+        inj_shift = {"home": 0.0, "away": 0.0}
+
+        # ---------- 确认版复算：把伤病名单折成 DC 偏移，重算概率 ----------
+        confirm_probs = None
+        if stage == "确认版" and not no_injury_data and competition == "BL1":
+            is_shift = self._injury_shift
+            inj_shift["home"] = is_shift(len(inj.get("home_key_out", [])),
+                                         len(inj.get("home_doubtful", [])))
+            inj_shift["away"] = is_shift(len(inj.get("away_key_out", [])),
+                                         len(inj.get("away_doubtful", [])))
+            if inj_shift["home"] or inj_shift["away"]:
+                res_c = self._probs_for(home_code, away_code, home_disc=disc_h, away_disc=disc_a,
+                                        inj_shift_h=inj_shift["home"], inj_shift_a=inj_shift["away"])
+                confirm_probs = res_c["fused"]
+                validate_probs(confirm_probs)
+                probs = confirm_probs   # 卡片主概率 = 确认版复算结果
+                res = res_c
+
+        # ---------- R4 分歧场次标注：Elo vs DC 方向不一致 → 降一档 ----------
+        elo_dir = "home_win" if res["elo"]["home_win"] > 0.5 else "away_win"
+        dc = res.get("dc", res.get("elo", res))   # 跨赛事模式无 dc → 回退 elo/fused
+        dc_dir = "home_win" if dc["home_win"] > dc["draw"] and dc["home_win"] > dc["away_win"] else \
+                 ("draw" if dc["draw"] >= dc["away_win"] else "away_win")
+        pick_dir = "home_win" if probs["home_win"] > probs["away_win"] else "away_win"
+        div = self.rules.mark_divergence(elo_dir, dc_dir, pick_dir, match_id,
+                                         elo_home_p=res["elo"]["home_win"],
+                                         dc_home_p=dc["home_win"])
+        confidence = self.rules.downgrade_confidence(confidence, div["confidence_downgrade_steps"])
+
+        # ---------- R2 伤病升级：中/低置信度 + 48h → 复算升级（仅当具备实时伤病） ----------
+        if stage == "初版" and realtime_injury_available and self.rules.needs_confirmed_recalc(
+                confidence, match.get("last_updated", ""), match.get("kickoff", ""), match_id):
+            stage = "确认版"
+
+        # ---------- R5 连续跟踪 ----------
+        self.rules.track_round_seq(home_code, round_no, match_id)
+        self.rules.track_round_seq(away_code, round_no, match_id)
+
+        if stage == "确认版" and confirm_probs is not None:
+            note = ("确认版复算：按伤病偏移量调整 DC，主概率较初版有变化。"
+                    + ("含临场缺阵信息。" if not no_injury_data else ""))
+        else:
+            note = div["note_prefix"] + ("无伤病数据，输出基准概率。" if no_injury_data
+                                         else "临场缺阵或前场创造力缺失。")
+        # 疲劳/欧战前置信息（跨赛事分析，UI 醒目标记）
+        fatigue_info = {
+            "home_rest_days": f_home.get("rest_days"),
+            "away_rest_days": f_away.get("rest_days"),
+            "home_fatigue_discount": round(fatigue_disc_h, 4),
+            "away_fatigue_discount": round(fatigue_disc_a, 4),
+            "cl_preceding_home": cl_preceding_h,
+            "cl_preceding_away": cl_preceding_a,
+        }
+        card = {
+            "match_id": match_id, "competition": competition,
+            "home_team": home, "away_team": away,
+            "kickoff": match.get("kickoff", ""), "stage": stage,
+            "last_updated": match.get("last_updated", ""),
+            "standings": match.get("standings"),
+            "form_last3": match.get("form_last3"),
+            "injuries": inj,
+            "fatigue": fatigue_info,
+            "national_team_factor": {"active": is_first_round_after_fifa,
+                                     "home": 1 - disc_h, "away": 1 - disc_a},
+            "probabilities": {k: round(v, 3) for k, v in probs.items()},
+            "base_probs": base_probs,
+            "confirm_probs": {k: round(v, 3) for k, v in confirm_probs.items()} if confirm_probs else None,
+            "injury_shift": inj_shift,
+            "score_top2": res["score_top2"],
+            "pick": (home if pick_dir == "home_win" else away) + "胜",
+            "handicap_direction": {"line": f"{away} -0.5", "caution": "中高"},
+            "confidence": confidence,
+            "risk_note": note,
+            "data_availability": "无伤病数据" if no_injury_data else "含伤病数据",
+            "confirm_blocked": confirm_blocked,
+            "model_breakdown": {"elo_home": round(res["elo"]["home_win"], 3),
+                                "elo_draw": round(res["elo"]["draw"], 3),
+                                "elo_away": round(res["elo"]["away_win"], 3),
+                                "dc_score_top2": [s["score"] for s in res["score_top2"]]},
+        }
+
+        # 确认版强制 48h 窗口校验（窗口取自 config.RULES.R2）
+        if stage == "确认版" and not validate_stage_window(
+                card["last_updated"], card["kickoff"],
+                RULES["R2_injury_upgrade"]["confirm_window_hours"]):
+            if confirm_probs is not None:
+                # 手动伤病驱动的复算保留为确认版，但如实标注为赛前48h窗口外预览
+                card["stage"] = "确认版"
+                card["risk_note"] += "（赛前48h窗口尚未进入，本为复算预览）"
+            else:
+                card["stage"] = "初版"
+        return card
+
+    # ---------------- 整轮预测（含无数据降级容错，验收条件 #4） ----------------
+    def _injury_shift(self, n_key_out: int, n_doubtful: int) -> float:
+        """按 config.injury_shift 计算单队伤病偏移（有上限）。未标定 → 用保守默认值。"""
+        cfg = RULES["injury_shift"]
+        raw = cfg["key_out_shift"] * n_key_out + cfg["doubtful_shift"] * n_doubtful
+        return round(min(raw, cfg["max_total_shift"]), 4)
+
+    def predict_round(self, round_no: int, stage: str = "初版",
+                      is_first_round_after_fifa: bool = False,
+                      manual_injuries: dict | None = None,
+                      competition: str = "BL1") -> dict:
+        if competition == "BL1":
+            fixtures, meta = self.fetch_round(round_no)
+        elif competition == "CL":
+            try:
+                cl = self.provider.fetch_competition_round("CL", round_no)
+                fixtures = cl or []
+                meta = {"freshness": self.provider.freshness(),
+                        "realtime_injury_available": False,
+                        "round_has_data": bool(fixtures), "round_no": round_no}
+            except Exception:
+                fixtures, meta = [], {"freshness": self.provider.freshness(),
+                                      "realtime_injury_available": False,
+                                      "round_has_data": False, "round_no": round_no}
+        else:
+            # EL/DFB/欧协：免费层不可用 → 诚实返回受限提示（不抛 500）
+            from config import COMPETITIONS
+            comp_cfg = COMPETITIONS.get(competition, {})
+            meta = {"freshness": self.provider.freshness(),
+                    "realtime_injury_available": False,
+                    "round_has_data": False, "round_no": round_no,
+                    "competition_unavailable": True,
+                    "comp_note": comp_cfg.get("note", "免费层不可用")}
+            return {"round": round_no, "competition": competition, "meta": meta,
+                    "freshness_label": self.data_freshness_label(meta), "cards": [],
+                    "comp_unavailable": True, "comp_note": meta["comp_note"]}
+
+        # 方案 C：手动录入伤病（按 code 注入，football-data.org 不提供伤病）
+        if manual_injuries:
+            for m in fixtures:
+                inj = m.get("injuries", {})
+                hi = manual_injuries.get(m.get("home_code"))
+                ai = manual_injuries.get(m.get("away_code"))
+                if hi:
+                    inj["home_key_out"] = hi.get("key_out", [])
+                    inj["home_doubtful"] = hi.get("doubtful", [])
+                if ai:
+                    inj["away_key_out"] = ai.get("key_out", [])
+                    inj["away_doubtful"] = ai.get("doubtful", [])
+                m["injuries"] = inj
+            meta["realtime_injury_available"] = True   # 手动伤病视为具备实时伤病
+
+        # 疲劳特征：德甲轮次叠加欧冠赛程（欧战干扰），CL 轮不需（自身即欧战）
+        fatigue_map = {}
+        if competition == "BL1":
+            try:
+                bl1_all = self.provider.fetch_competition_matches("BL1")
+                cl_all = self.provider.fetch_competition_matches("CL")
+                fe = FatigueEngine(bl1_all, cl_all)
+                fatigue_map = fe.analyze(fixtures, cl_all)
+            except Exception:
+                fatigue_map = {}
+
+        cards = []
+        if fixtures:
+            for match in fixtures:
+                cards.append(self.predict_match(
+                    match, round_no, stage=stage,
+                    is_first_round_after_fifa=is_first_round_after_fifa,
+                    realtime_injury_available=meta["realtime_injury_available"],
+                    fatigue=fatigue_map, competition=competition))
+        else:
+            # 无数据轮次：GBM 兜底退化 DC，输出基准概率（不抛 500）
+            cards.append(self._baseline_card(round_no))
+        return {
+            "round": round_no, "competition": competition,
+            "meta": meta,
+            "freshness_label": self.data_freshness_label(meta),
+            "cards": cards,
+        }
+
+    def _baseline_card(self, round_no: int) -> dict:
+        """未来/无数据轮次的基准输出（GBM→DC 退化，中性对阵）。"""
+        res = self._probs_for("NODATA", "NODATA")   # 未知队 → 默认中性
+        probs = res["fused"]
+        validate_probs(probs)
+        return {
+            "match_id": f"BUN_{SEASON}_27_R{round_no:02d}_NODATA",
+            "home_team": "—", "away_team": "—",
+            "kickoff": "", "stage": "初版", "last_updated": "",
+            "standings": {}, "form_last3": {}, "injuries": {},
+            "national_team_factor": {"active": False, "home": 1.0, "away": 1.0},
+            "probabilities": {k: round(v, 3) for k, v in probs.items()},
+            "score_top2": res["score_top2"],
+            "pick": "基准", "handicap_direction": {"line": "—", "caution": "—"},
+            "confidence": "低", "risk_note": "该轮暂无比赛数据，输出 GBM→DC 兜底基准概率。",
+            "data_availability": "无数据", "confirm_blocked": False,
+            "model_breakdown": {"elo_home": round(res["elo"]["home_win"], 3),
+                                "elo_draw": round(res["elo"]["draw"], 3),
+                                "elo_away": round(res["elo"]["away_win"], 3),
+                                "dc_score_top2": [s["score"] for s in res["score_top2"]]},
+        }
+
+    # ---------------- 全局输出 ----------------
+    def round_global_summary(self, round_no: int) -> dict:
+        return {
+            "round": round_no,
+            "prev_round_bias_summary": self.rules.prev_round_bias_summary(round_no),
+            "uncalibrated_thresholds": uncalibrated_thresholds(),
+        }
+
