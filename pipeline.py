@@ -8,7 +8,8 @@ P1 新增：灌入德甲历史 CSV 重训 Elo + Dixon-Coles + GBM（XGB+LGBM）�
 from __future__ import annotations
 import math
 from datetime import datetime
-from config import RULES, SEASON, ENSEMBLE_WEIGHTS, uncalibrated_thresholds, FATIGUE_RULES, HOME_ADV
+from config import (RULES, SEASON, ENSEMBLE_WEIGHTS, uncalibrated_thresholds,
+                    FATIGUE_RULES, LUCK_REGRESSION, HOME_ADV)
 from schema import validate_probs, validate_stage_window
 from data.api_client import resolve_provider
 from data.historical_data import CODE2ENG
@@ -128,7 +129,8 @@ class PredictionPipeline:
                       is_first_round_after_fifa: bool = False,
                       realtime_injury_available: bool = False,
                       fatigue: dict | None = None,
-                      competition: str = "BL1") -> dict:
+                      competition: str = "BL1",
+                      luck_map: dict | None = None) -> dict:
         home, away = match["home_team"], match["away_team"]
         home_code = match.get("home_code", home)
         away_code = match.get("away_code", away)
@@ -160,6 +162,36 @@ class PredictionPipeline:
         # 疲劳 xG 折扣并入（欧战/杯赛休息不足等）
         disc_h += fatigue_disc_h
         disc_a += fatigue_disc_a
+        # P4·优先级二②：战意规则（写死）—— 欧冠前3天打联赛 + 联赛对手排名低≥5名 → 硬扣 0.15 xG（不被疲劳封顶吞掉）
+        mot_pen_h = float(f_home.get("cl_motivation_penalty", 0.0) or 0.0)
+        mot_pen_a = float(f_away.get("cl_motivation_penalty", 0.0) or 0.0)
+        disc_h += mot_pen_h
+        disc_a += mot_pen_a
+        # P4·优先级二①：运气回归（触底反弹）—— 近5场机会创造强但转化极差
+        # 阈值用"联赛相对分布"：gap 须高于联赛均值 + gap_z·σ，且射正均值≥联赛中位数
+        # （HST 为射正计数代理，尺度远高于进球，须相对联赛基线否则全员触发）。
+        luck_cfg = LUCK_REGRESSION
+        lu_map = luck_map or {}
+        lu_h = lu_map.get(home_code) or {}
+        lu_a = lu_map.get(away_code) or {}
+        if lu_map:
+            gaps = [v.get("gap", 0.0) for v in lu_map.values()]
+            hsts = [v.get("roll_hst", 0.0) for v in lu_map.values()]
+            _g = float(sum(gaps) / len(gaps))
+            _sd = (sum((x - _g) ** 2 for x in gaps) / len(gaps)) ** 0.5
+            _med_h = sorted(hsts)[len(hsts) // 2]
+            _thr_gap = _g + luck_cfg["gap_z"] * _sd
+        else:
+            _thr_gap, _med_h = float("inf"), float("inf")
+
+        def _rebound(lu: dict) -> bool:
+            return bool(lu) and lu.get("roll_hst", 0.0) >= _med_h \
+                and lu.get("gap", 0.0) >= _thr_gap
+        rebound_h, rebound_a = _rebound(lu_h), _rebound(lu_a)
+        if rebound_h:
+            disc_h = max(disc_h - luck_cfg["xg_boost"], -luck_cfg["xg_boost"])
+        if rebound_a:
+            disc_a = max(disc_a - luck_cfg["xg_boost"], -luck_cfg["xg_boost"])
 
         # ---------- 初版基准概率（R3+疲劳折扣，无伤病偏移） ----------
         if competition == "BL1":
@@ -226,7 +258,13 @@ class PredictionPipeline:
             "cl_preceding_away": cl_preceding_a,
             "home_prev_extra_time": bool(f_home.get("prev_extra_time")),
             "away_prev_extra_time": bool(f_away.get("prev_extra_time")),
+            # P4·优先级二②：战意规则硬扣（欧冠前置轮换的强条件，对手弱旅）
+            "home_motivation_penalty": mot_pen_h,
+            "away_motivation_penalty": mot_pen_a,
         }
+        # P4·优先级二①：运气回归（触底反弹）标签与 gap
+        luck_info = {"home_gap": lu_h.get("gap"), "away_gap": lu_a.get("gap"),
+                     "home_rebound": rebound_h, "away_rebound": rebound_a}
         card = {
             "match_id": match_id, "competition": competition,
             "home_team": home, "away_team": away,
@@ -242,6 +280,7 @@ class PredictionPipeline:
             "base_probs": base_probs,
             "confirm_probs": {k: round(v, 3) for k, v in confirm_probs.items()} if confirm_probs else None,
             "injury_shift": inj_shift,
+            "luck": luck_info,
             "score_top2": res["score_top2"],
             "pick": (home if pick_dir == "home_win" else away) + "胜",
             "handicap_direction": {"line": f"{away} -0.5", "caution": "中高"},
@@ -287,7 +326,8 @@ class PredictionPipeline:
     def predict_round(self, round_no: int, stage: str = "初版",
                       is_first_round_after_fifa: bool = False,
                       manual_injuries: dict | None = None,
-                      competition: str = "BL1") -> dict:
+                      competition: str = "BL1",
+                      luck_map: dict | None = None) -> dict:
         if competition == "BL1":
             fixtures, meta = self.fetch_round(round_no)
         elif competition == "CL":
@@ -347,7 +387,8 @@ class PredictionPipeline:
                     match, round_no, stage=stage,
                     is_first_round_after_fifa=is_first_round_after_fifa,
                     realtime_injury_available=meta["realtime_injury_available"],
-                    fatigue=fatigue_map, competition=competition))
+                    fatigue=fatigue_map, competition=competition,
+                    luck_map=luck_map))
         else:
             # 无数据轮次：GBM 兜底退化 DC，输出基准概率（不抛 500）
             cards.append(self._baseline_card(round_no))

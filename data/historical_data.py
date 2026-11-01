@@ -120,3 +120,18 @@ def team_last_state(df: pd.DataFrame, team: str, form_n: int = 3, roll_n: int = 
         "roll_hg": float(np.mean(hg)) if hg else 1.0,
         "roll_hst": float(np.mean(hst)) if hst else 1.0,
     }
+
+
+def luck_map(seasons: list[str] | None = None, window: int = 5) -> dict:
+    """运气回归特征（P4·优先级二①）：每队近 window 场"实际进球均值 − xG(射正HST代理)均值"。
+    返回 {code: {"roll_hg", "roll_hst", "gap"}}；gap = roll_hst - roll_hg。
+    诚实口径：football-data.org 免费层无真 xG，用射正 HST 作代理（历史 CSV D1 提供）。
+    """
+    df = load_seasons(seasons or ["2526"])
+    out = {}
+    for code, eng in CODE2ENG.items():
+        st = team_last_state(df, eng, roll_n=window)
+        hg = st["roll_hg"]; hst = st["roll_hst"]
+        out[code] = {"roll_hg": round(hg, 3), "roll_hst": round(hst, 3),
+                     "gap": round(hst - hg, 3)}
+    return out

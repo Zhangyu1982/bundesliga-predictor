@@ -15,8 +15,8 @@ P2 · 跨赛事分析（德甲 + 欧冠，免费层真实可用）
 """
 from __future__ import annotations
 from datetime import datetime, timedelta
-from config import (FATIGUE_RULES, ELO_K_MULT, LEAGUE_BASE_ELO, LEAGUE_NAME2CODE,
-                    CL_TEAM_ELO)
+from config import (FATIGUE_RULES, MOTIVATION_RULES, ELO_K_MULT, LEAGUE_BASE_ELO,
+                    LEAGUE_NAME2CODE, CL_TEAM_ELO)
 
 
 def _parse_date(s: str) -> datetime | None:
@@ -91,6 +91,7 @@ class FatigueEngine:
             if d:
                 cl_dates.append((d, c.get("home_code"), c.get("away_code")))
         cfg = FATIGUE_RULES
+        mot = MOTIVATION_RULES
         for m in fixtures:
             kick = _parse_date(m.get("kickoff", ""))
             mid = m.get("match_id")
@@ -117,14 +118,25 @@ class FatigueEngine:
                         "_fatigue": fatigue,   # 中间值（欧冠前置循环再加轮换折扣后统一封顶）
                     }
                 # 欧冠前置：本场后 7 天内该队有欧冠 → 可能轮换，折入轮换折扣(实测标定)
+                stnd = m.get("standings") or {}
+                hr = (stnd.get("home") or {}).get("rank")
+                ar = (stnd.get("away") or {}).get("rank")
                 for d, hc, ac in cl_dates:
-                    if 0 < (d - kick).days <= cfg["midweek_window_days"]:
+                    gap_days = (d - kick).days
+                    if 0 < gap_days <= cfg["midweek_window_days"]:
                         if hc == home_c:
                             rec["home"]["cl_preceding"] = True
                             rec["home"]["_fatigue"] += cfg["cl_rotation_discount"]
                         if ac == away_c:
                             rec["away"]["cl_preceding"] = True
                             rec["away"]["_fatigue"] += cfg["cl_rotation_discount"]
+                    # 战意规则（P4·优先级二②，用户定死）：欧冠前 cl_league_window_days 天内打联赛，
+                    # 且联赛对手排名比自己低 opponent_rank_gap 名以上（弱旅无需死拼）→ 直接扣 xg_deduction。
+                    if 0 < gap_days <= mot["cl_league_window_days"]:
+                        if hc == home_c and hr and ar and (ar - hr) >= mot["opponent_rank_gap"]:
+                            rec["home"]["cl_motivation_penalty"] = mot["xg_deduction"]
+                        if ac == away_c and hr and ar and (hr - ar) >= mot["opponent_rank_gap"]:
+                            rec["away"]["cl_motivation_penalty"] = mot["xg_deduction"]
                 # 统一封顶：常规 xG_discount_max；若上一场为加时赛 → 上限放宽一个 extra_time_discount（极端惩罚不被常规封顶吃掉）
                 for side in ("home", "away"):
                     f = rec[side]

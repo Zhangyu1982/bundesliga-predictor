@@ -147,6 +147,17 @@ def _build_explanation(c: dict, comp: str) -> str:
         parts.append(f"{c['home_team']} 欧冠前置可能轮换")
     if ft.get("cl_preceding_away"):
         parts.append(f"{c['away_team']} 欧冠前置可能轮换")
+    # P4·优先级二②：战意规则（欧冠前3天打联赛 + 对手弱旅 → 硬扣 xG）
+    if ft.get("home_motivation_penalty"):
+        parts.append(f"{c['home_team']} 欧冠前3天打联赛且对手弱旅 → 战意不足，扣减xG {ft['home_motivation_penalty']}")
+    if ft.get("away_motivation_penalty"):
+        parts.append(f"{c['away_team']} 欧冠前3天打联赛且对手弱旅 → 战意不足，扣减xG {ft['away_motivation_penalty']}")
+    # P4·优先级二①：运气回归（触底反弹）标签 —— 近5场机会创造强但转化差（高xG低进球）
+    lk = c.get("luck", {})
+    if lk.get("home_rebound"):
+        parts.append(f"📈 {c['home_team']} 进攻端触底反弹（近5场射正高但进球少，gap {lk['home_gap']}）")
+    if lk.get("away_rebound"):
+        parts.append(f"📈 {c['away_team']} 进攻端触底反弹（近5场射正高但进球少，gap {lk['away_gap']}）")
     if c.get("score_top2"):
         parts.append(f"最可能比分 {c['score_top2'][0]['score']}")
     if comp == "CL":
@@ -203,6 +214,17 @@ if hasattr(pipe.provider, "fetch_competition_round") and hasattr(pipe.provider, 
 def _cached_espn() -> dict:
     """缓存 ESPN 伤病+新闻候选（10 分钟内不重复请求 ESPN）。"""
     return fetch_all_candidates()
+
+
+# P4·优先级二①：运气回归特征（近5场 射正HST代理 vs 实际进球），读 2526 赛季历史 CSV（已入库部署）。
+# 用 @st.cache_resource 缓存（CSV 读取 + 计算，非外部 API，无需 TTL 过期）。
+@st.cache_resource
+def _luck_map() -> dict:
+    from data.historical_data import luck_map
+    try:
+        return luck_map()
+    except Exception:
+        return {}
 
 # ================= 顶部 =================
 st.title("德甲预测机器人")
@@ -314,7 +336,8 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
     try:
         with st.spinner("AI 正在拉取数据并计算……"):
             result = pipe.predict_round(ss["round"], stage=ss["stage"],
-                                        manual_injuries=merged, competition=ss["competition"])
+                                        manual_injuries=merged, competition=ss["competition"],
+                                        luck_map=_luck_map())
     except Exception:
         ss["_running"] = False
         st.error("⚠️ 当前请求过载，请 1 分钟后再试。")
@@ -383,6 +406,17 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
             if fatigue.get("home_fatigue_discount", 0) or fatigue.get("away_fatigue_discount", 0):
                 markers.append(f"疲劳xG折扣 主{fatigue.get('home_fatigue_discount')}/客{fatigue.get('away_fatigue_discount')}"
                                f"（休息 主{fatigue.get('home_rest_days','—')}/客{fatigue.get('away_rest_days','—')}天）")
+            # P4·优先级二②：战意规则硬扣标记
+            if fatigue.get("home_motivation_penalty"):
+                markers.append(f"⚠️ {c['home_team']} 战意不足：欧冠前3天联赛+对手弱旅 → 扣xG {fatigue['home_motivation_penalty']}")
+            if fatigue.get("away_motivation_penalty"):
+                markers.append(f"⚠️ {c['away_team']} 战意不足：欧冠前3天联赛+对手弱旅 → 扣xG {fatigue['away_motivation_penalty']}")
+            # P4·优先级二①：运气回归（触底反弹）标记
+            lk = c.get("luck", {})
+            if lk.get("home_rebound"):
+                markers.append(f"📈 {c['home_team']} 进攻端触底反弹（近5场 gap {lk['home_gap']}）")
+            if lk.get("away_rebound"):
+                markers.append(f"📈 {c['away_team']} 进攻端触底反弹（近5场 gap {lk['away_gap']}）")
             if markers:
                 st.warning("；".join(markers))
             st.markdown(f"**胜/平/负**　主胜 `{p['home_win']}` · 平 `{p['draw']}` · 客胜 `{p['away_win']}`")
@@ -407,6 +441,55 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
             st.caption(f"model_breakdown: elo={c['model_breakdown']['elo_home']}/"
                        f"{c['model_breakdown']['elo_draw']}/{c['model_breakdown']['elo_away']} · "
                        f"dc_score_top2={c['model_breakdown']['dc_score_top2']}")
+
+# ================= P4·优先级二③：历史回测看板（静态结果，非实时计算，避免拖慢主应用） =================
+@st.cache_resource
+def _backtest_report() -> dict:
+    import json, os
+    p = os.path.join(os.path.dirname(__file__), "data", "backtest_report.json")
+    try:
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+with st.expander("📊 历史回测看板（近3赛季 · 918场 walk-forward · 静态结果）"):
+    btrep = _backtest_report()
+    if not btrep:
+        st.caption("（历史回测报告未生成——本地运行 `python3 scripts/backtest_report.py` 生成 "
+                   "`data/backtest_report.json` 后自动显示；静态渲染不拖慢主页面）")
+    else:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("回测场次", btrep.get("games", "—"))
+        c2.metric("方向命中率", f"{btrep.get('direction_accuracy', 0) * 100:.1f}%")
+        c3.metric("爆冷率", f"{btrep.get('upset_rate', 0) * 100:.1f}%")
+        c4.metric("R4分歧阈值", btrep.get("r4", {}).get("threshold", "—"))
+        st.markdown("**按轮次方向命中率**")
+        rcs = btrep.get("round_curve", [])
+        if rcs:
+            bars = []
+            for c in rcs:
+                w = int(c["acc"] * 100)
+                bars.append(
+                    f'<div style="display:flex;align-items:center;margin:2px 0;font-size:12px;">'
+                    f'<span style="width:34px;">R{c["round"]}</span>'
+                    f'<div style="width:60%;background:#e5e7eb;border-radius:4px;height:12px;">'
+                    f'<div style="width:{w}%;background:#2563eb;height:12px;border-radius:4px;"></div></div>'
+                    f'<span style="margin-left:8px;">{c["acc"] * 100:.0f}% (n={c["n"]})</span></div>')
+            st.markdown("".join(bars), unsafe_allow_html=True)
+        ssum = btrep.get("season_summary", [])
+        if ssum:
+            st.markdown("**按赛季**")
+            st.markdown("| 赛季 | 场次 | 命中率 | 爆冷率 |")
+            st.markdown("|---|---|---|---|")
+            for s in ssum:
+                st.markdown(f"| {s['season']} | {s['n']} | {s['acc'] * 100:.1f}% | {s['upset'] * 100:.1f}% |")
+        div = btrep.get("divergence", {})
+        st.caption(f"Elo/DC **分歧**场爆冷率 {div.get('div_upset', 0) * 100:.1f}% vs "
+                   f"**一致**场 {div.get('no_div_upset', 0) * 100:.1f}%"
+                   f"；R1 偏差惯性基线错率 {btrep.get('r1', {}).get('baseline_wrong_rate', 0) * 100:.1f}%"
+                   f"（更新于 {btrep.get('generated_at', '—')}）")
 
 # ================= P4·优先级三②：合规免责声明 =================
 st.markdown("---")

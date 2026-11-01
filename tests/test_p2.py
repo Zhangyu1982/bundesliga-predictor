@@ -248,3 +248,89 @@ def test_build_explanation():
     # 基准卡兜底
     base = {"pick": "基准"}
     assert "基准概率" in _build_explanation(base, "BL1")
+
+
+# ---------- P4·优先级二①：运气回归（触底反弹）特征 ----------
+def test_luck_map_shape():
+    from data.historical_data import luck_map
+    m = luck_map()
+    assert "BAY" in m and "MAI" in m and "HSV" in m
+    assert all(set(v) == {"roll_hg", "roll_hst", "gap"} for v in m.values())
+    # 2526 赛季已开赛 → 有真实近5场数据
+    assert m["BAY"]["roll_hst"] > 0
+
+
+def test_luck_rebound_detected_and_explained():
+    from pipeline import PredictionPipeline
+    from app import _build_explanation
+    p = PredictionPipeline()
+    match = {
+        "match_id": "565851", "home_team": "美因茨", "away_team": "拜仁慕尼黑",
+        "home_code": "MAI", "away_code": "BAY",
+        "kickoff": "2026-11-07T22:30:00+08:00", "last_updated": "2026-11-01T15:00:00+08:00",
+        "standings": {}, "form_last3": {}, "confidence": "中",
+        "injuries": {"home_key_out": [], "away_key_out": [], "home_doubtful": [], "away_doubtful": []},
+    }
+    # MAI 近5场射正均值高(机会强)但进球少 → 触底反弹；BAY 正常（需至少3队算相对基线）
+    lm = {"MAI": {"roll_hg": 0.8, "roll_hst": 4.2, "gap": 3.4},
+          "BAY": {"roll_hg": 2.2, "roll_hst": 2.5, "gap": 0.3},
+          "DOR": {"roll_hg": 2.0, "roll_hst": 3.0, "gap": 1.0}}
+    card = p.predict_match(match, 9, stage="初版", luck_map=lm)
+    assert card["luck"]["home_rebound"] is True
+    assert card["luck"]["away_rebound"] is False
+    assert card["luck"]["home_gap"] == 3.4
+    txt = _build_explanation(card, "BL1")
+    assert "触底反弹" in txt and "📈" in txt
+
+
+# ---------- P4·优先级二②：战意规则（欧冠前3天联赛 + 对手弱旅 → 硬扣0.15xG） ----------
+def test_motivation_penalty_when_cl_preceding_and_weak_opponent():
+    from data.cross_competition import FatigueEngine
+    from config import MOTIVATION_RULES
+    fe = FatigueEngine([], [])
+    bl1 = [{"match_id": "m1", "competition": "BL1", "home_team": "A", "away_team": "B",
+            "home_code": "AAA", "away_code": "BBB", "kickoff": "2026-10-01T18:00:00Z",
+            "status": "TIMED", "score": {},
+            "standings": {"home": {"rank": 3, "pts": 20}, "away": {"rank": 10, "pts": 8}}}]
+    cl = [{"match_id": "c1", "competition": "CL", "home_team": "A", "away_team": "C",
+           "home_code": "AAA", "away_code": "CCC", "kickoff": "2026-10-03T19:00:00Z",
+           "status": "TIMED", "score": {}}]
+    amap = fe.analyze(bl1, cl)
+    h = amap["m1"]["home"]
+    assert h["cl_motivation_penalty"] == MOTIVATION_RULES["xg_deduction"]  # 对手排名低7名
+    assert amap["m1"]["away"].get("cl_motivation_penalty", 0.0) == 0.0
+
+
+def test_motivation_penalty_not_when_rank_close():
+    from data.cross_competition import FatigueEngine
+    fe = FatigueEngine([], [])
+    bl1 = [{"match_id": "m1", "competition": "BL1", "home_team": "A", "away_team": "B",
+            "home_code": "AAA", "away_code": "BBB", "kickoff": "2026-10-01T18:00:00Z",
+            "status": "TIMED", "score": {},
+            "standings": {"home": {"rank": 3, "pts": 20}, "away": {"rank": 5, "pts": 14}}}]
+    cl = [{"match_id": "c1", "competition": "CL", "home_team": "A", "away_team": "C",
+           "home_code": "AAA", "away_code": "CCC", "kickoff": "2026-10-03T19:00:00Z",
+           "status": "TIMED", "score": {}}]
+    amap = fe.analyze(bl1, cl)
+    h = amap["m1"]["home"]
+    assert h.get("cl_motivation_penalty", 0.0) == 0.0   # 对手只低2名 → 不触发
+    assert h["cl_preceding"] is True                     # 仍处轮换窗口（7天内）
+    # 超出3天窗口 → 也不触发战意（只保留轮换标记）
+    cl2 = [dict(cl[0], kickoff="2026-10-05T19:00:00Z")]  # 差4天
+    bl1b = [dict(bl1[0], standings={"home": {"rank": 3, "pts": 20}, "away": {"rank": 10, "pts": 8}})]
+    amap2 = fe.analyze(bl1b, cl2)
+    assert amap2["m1"]["home"].get("cl_motivation_penalty", 0.0) == 0.0
+    assert amap2["m1"]["home"]["cl_preceding"] is True
+
+
+# ---------- P4·优先级二③：历史回测看板静态报告 ----------
+def test_backtest_report_file():
+    import json, os
+    p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "data", "backtest_report.json")
+    assert os.path.exists(p), "请先运行 python3 scripts/backtest_report.py"
+    rep = json.load(open(p, encoding="utf-8"))
+    assert rep["games"] == 918
+    assert 0.4 < rep["direction_accuracy"] < 0.7
+    assert rep["r4"]["threshold"] is not None
+    assert rep["r1"]["baseline_wrong_rate"] > 0
