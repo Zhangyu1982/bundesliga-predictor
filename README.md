@@ -84,6 +84,7 @@ python3 scripts/backtest.py              # 918 场 walk-forward → 写 bias.db 
 python3 scripts/backtest_report.py       # 生成静态 data/backtest_report.json（页面只读渲染）
 python3 scripts/calibrate_fatigue.py     # 疲劳系数真实标定（已跑，勿随意覆盖）
 python3 scripts/calibrate_injury.py      # injury_shift 敏感性标定 → data/calibration_report.json
+python3 scripts/record_live_result.py    # 记录真实比赛结果→R1偏差库(bias.db)；诚实只记确知字段，缺失概率留NULL
 ```
 回测看板**只在本地跑，不塞进主应用**，避免每次交互重算拖慢页面。
 injury_shift：因无历史真实伤病名单数据源（TheSportsDB 403/Transfermarkt Cloudflare/ESPN 德甲空），

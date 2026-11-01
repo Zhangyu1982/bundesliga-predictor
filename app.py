@@ -411,6 +411,9 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
 
     # ---------- 本轮推荐速览表（顶部，便于一键截图；用 Markdown 表格，避免 pyarrow/NumPy 兼容问题） ----------
     if not result.get("comp_unavailable") and cards:
+        # P5·伤病提醒横幅：赛前未抓到任何伤病数据 → 醒目提示（初版纯基准，建议录入/抓取生成确认版）
+        if not realtime_injury:
+            st.error("⚠️ **暂无实时伤病数据，当前为初版纯基准概率，建议手动录入伤病或点击自动抓取以生成确认版！**")
         # P3·移动端：卡片式布局替代宽表格（st.container border + st.progress，无需横向滑动）
         st.markdown("### 📋 本轮推荐速览（胜平负 + 推荐比分）")
         for idx, c in enumerate(cards, 1):
