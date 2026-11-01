@@ -102,6 +102,58 @@ def _fmt_inj(lst) -> str:
     return "、".join(parts) or "—"
 
 
+def _build_explanation(c: dict, comp: str) -> str:
+    """预测解释（P4·优先级二①）：基于真实卡片数据生成可读理由，不虚构 xG/裁判。
+    覆盖：推荐方向与概率结构、伤病（按重要性加权偏移）、疲劳（休息不足/加时赛/欧冠前置轮换）。"""
+    pick = c.get("pick", "")
+    if pick == "基准":
+        return "**预测解释：** 该轮暂无比赛数据，输出 GBM→DC 兜底基准概率，仅供参考。"
+    p = c["probabilities"]
+    parts = [f"**预测解释：** 模型更看好「{pick}」"]
+    if p["home_win"] >= 0.55:
+        parts.append(f"主队占优明显（主胜 {p['home_win']:.0%}）")
+    elif p["away_win"] >= 0.55:
+        parts.append(f"客队占优明显（客胜 {p['away_win']:.0%}）")
+    elif p["draw"] >= max(p["home_win"], p["away_win"]):
+        parts.append(f"双方势均力敌（平局 {p['draw']:.0%} 最高）")
+    elif p["home_win"] > p["away_win"]:
+        parts.append(f"主队略占优（主胜 {p['home_win']:.0%} vs 客胜 {p['away_win']:.0%}）")
+    else:
+        parts.append(f"客队略占优（客胜 {p['away_win']:.0%} vs 主胜 {p['home_win']:.0%}）")
+    # 伤病：按重要性加权的偏移
+    inj = c.get("injuries", {})
+    hk = _fmt_inj(inj.get("home_key_out", []))
+    ak = _fmt_inj(inj.get("away_key_out", []))
+    if hk != "—":
+        parts.append(f"{c['home_team']} 缺阵 {hk}")
+    if ak != "—":
+        parts.append(f"{c['away_team']} 缺阵 {ak}")
+    ish = c.get("injury_shift", {})
+    if ish.get("home"):
+        parts.append(f"主队伤病偏移 {ish['home']}")
+    if ish.get("away"):
+        parts.append(f"客队伤病偏移 {ish['away']}")
+    # 疲劳：休息不足 / 加时赛极端惩罚 / 欧冠前置轮换
+    ft = c.get("fatigue", {})
+    if ft.get("home_prev_extra_time"):
+        parts.append(f"{c['home_team']} 上一场打满120分钟加时（触发疲劳惩罚）")
+    if ft.get("away_prev_extra_time"):
+        parts.append(f"{c['away_team']} 上一场打满120分钟加时（触发疲劳惩罚）")
+    if ft.get("home_rest_days") is not None and ft["home_rest_days"] < 3:
+        parts.append(f"{c['home_team']} 仅休息 {ft['home_rest_days']} 天")
+    if ft.get("away_rest_days") is not None and ft["away_rest_days"] < 3:
+        parts.append(f"{c['away_team']} 仅休息 {ft['away_rest_days']} 天")
+    if ft.get("cl_preceding_home"):
+        parts.append(f"{c['home_team']} 欧冠前置可能轮换")
+    if ft.get("cl_preceding_away"):
+        parts.append(f"{c['away_team']} 欧冠前置可能轮换")
+    if c.get("score_top2"):
+        parts.append(f"最可能比分 {c['score_top2'][0]['score']}")
+    if comp == "CL":
+        parts.append("（欧冠跨赛事 Elo 推演）")
+    return "；".join(parts) + "。"
+
+
 st.set_page_config(page_title="德甲预测机器人 · P0", page_icon="⚽", layout="centered")
 
 # 未标定阈值的中文友好映射（验收条件 #2）
@@ -118,6 +170,39 @@ def get_pipeline():
 
 
 pipe = get_pipeline()
+
+# ============ P4·优先级一①：@st.cache_data(ttl=600) 缓存所有外部 API（football-data / ESPN） ============
+# 同一赛事同一轮 / 同一赛事全部赛程 / ESPN 伤病，10 分钟内只消耗 1 次 API 额度。
+# 参数均为字符串（可 hash，规避 pandas/complex-dict 缓存报错）；返回 list/dict 均可 pickle。
+# 用实例属性保存"原始方法"，只在首次运行时捕获，避免每次重跑把已缓存方法当作原始方法而嵌套。
+# 零密钥种子源（测试/无 token）无 fetch_competition_round → 跳过补丁（它本无外部网络请求）。
+if hasattr(pipe.provider, "fetch_competition_round") and hasattr(pipe.provider, "fetch_competition_matches"):
+    if getattr(pipe.provider, "_p4_orig", None) is None:
+        pipe.provider._p4_orig = (pipe.provider.fetch_competition_round,
+                                  pipe.provider.fetch_competition_matches)
+    _p4_orig_fr, _p4_orig_fm = pipe.provider._p4_orig
+
+
+    @st.cache_data(ttl=600, show_spinner=False)
+    def _cached_fr(comp: str, round_no: int) -> list:
+        """缓存某一赛事某一轮对阵（德甲 BL1 / 欧冠 CL）。"""
+        return _p4_orig_fr(comp, round_no)
+
+
+    @st.cache_data(ttl=600, show_spinner=False)
+    def _cached_fm(comp: str) -> list:
+        """缓存某一赛事全部比赛（疲劳特征用）。"""
+        return _p4_orig_fm(comp)
+
+
+    pipe.provider.fetch_competition_round = _cached_fr
+    pipe.provider.fetch_competition_matches = _cached_fm
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_espn() -> dict:
+    """缓存 ESPN 伤病+新闻候选（10 分钟内不重复请求 ESPN）。"""
+    return fetch_all_candidates()
 
 # ================= 顶部 =================
 st.title("德甲预测机器人")
@@ -162,10 +247,15 @@ with col_s:
 
 # ---------- 伤病获取：ESPN 自动抓取 + 手动录入兜底 ----------
 with st.expander("🏥 伤病获取（ESPN 自动抓取 + 手动录入兜底）"):
-    # 方案三：ESPN 自动抓取伤病候选（国内直连，无 token）
-    if st.button("🔎 自动抓取伤病候选（ESPN 国内直连）"):
+    # 方案三：ESPN 自动抓取伤病候选（国内直连，无 token）——@st.cache_data(600s) + 异常兜底
+    if st.button("🔎 自动抓取伤病候选（ESPN 国内直连）",
+                 disabled=ss.get("_running", False)):
         with st.spinner("正在抓取 ESPN 伤病接口 + 德甲新闻……"):
-            res = fetch_all_candidates()
+            try:
+                res = _cached_espn()
+            except Exception:
+                st.error("⚠️ 当前请求过载，请 1 分钟后再试。")
+                st.stop()
             ss["auto_candidates"] = res["candidates"]
             ss["auto_note"] = res["note"]
     if ss["auto_note"]:
@@ -208,7 +298,12 @@ if ss["stage"] == "确认版" and not realtime_injury:
     ss["stage"] = "初版"
 
 # ================= 预测输出 =================
-if st.button("生成预测", type="primary"):
+# P4·优先级一②③：按钮防抖禁用 + 全局异常兜底（超限红条，不抛堆栈）
+if st.button("生成预测", type="primary", disabled=ss.get("_running", False)):
+    if ss.get("_running"):
+        st.info("正在生成中，请稍候……")
+        st.stop()
+    ss["_running"] = True
     manual = _parse_manual_injuries(ss["manual_injuries"])
     checked = []
     if ss["auto_candidates"]:
@@ -216,9 +311,15 @@ if st.button("生成预测", type="primary"):
                    for i, c in enumerate(ss["auto_candidates"])
                    if st.session_state.get(f"cand_{i}", False)]
     merged = _merge_injuries(manual, checked)
-    with st.spinner("正在拉取数据并推演……"):
-        result = pipe.predict_round(ss["round"], stage=ss["stage"],
-                                    manual_injuries=merged, competition=ss["competition"])
+    try:
+        with st.spinner("AI 正在拉取数据并计算……"):
+            result = pipe.predict_round(ss["round"], stage=ss["stage"],
+                                        manual_injuries=merged, competition=ss["competition"])
+    except Exception:
+        ss["_running"] = False
+        st.error("⚠️ 当前请求过载，请 1 分钟后再试。")
+        st.stop()
+    ss["_running"] = False
     st.info(f"🕓 {result['freshness_label']}")
 
     # 免费层受限赛事（EL/DFB/欧协）→ 诚实提示
@@ -250,11 +351,16 @@ if st.button("生成预测", type="primary"):
     if blocked:
         st.warning(f"⚠️ 有 {len(blocked)} 场因**暂无赛前 48h 实时伤病数据**被降级为初版，未生成确认版。")
 
-    # 每场卡片
+    # 每场卡片（P4·优先级三①：折叠面板，标题带推荐方向与概率；展开才看明细）
     for c in cards:
         title = (f"{c['home_team']} vs {c['away_team']}"
                  if c.get("home_team") != "—" else f"第{c['match_id'].split('_R')[-1]}轮 · 无数据基准")
-        with st.expander(f"{title} · [{c['stage']}] {c['pick']} · 置信度 {c['confidence']}"):
+        if c["pick"] == "基准":
+            title_pick = "基准"
+        else:
+            pp = c["probabilities"]
+            title_pick = f"{c['pick']} ({pp['home_win'] if c['pick']==c['home_team']+'胜' else pp['away_win']:.0%})"
+        with st.expander(f"{title} | {title_pick} [{c['stage']}]"):
             # ---------- 验收条件 #2：卡片内未标定阈值黄色徽章 ----------
             if uncal:
                 badge = "⚠️ 伤病偏移量未标定，仅供参考"
@@ -296,6 +402,12 @@ if st.button("生成预测", type="primary"):
             st.markdown(f"**数据**　{c['data_availability']} · 伤病 "
                         f"主缺阵[{_fmt_inj(c['injuries'].get('home_key_out',[]))}] / 客缺阵[{_fmt_inj(c['injuries'].get('away_key_out',[]))}]")
             st.markdown(f"**风险**　{c['risk_note']}")
+            # P4·优先级二①：预测解释（Explainable AI）——每卡底部可读理由
+            st.markdown(_build_explanation(c, ss["competition"]))
             st.caption(f"model_breakdown: elo={c['model_breakdown']['elo_home']}/"
                        f"{c['model_breakdown']['elo_draw']}/{c['model_breakdown']['elo_away']} · "
                        f"dc_score_top2={c['model_breakdown']['dc_score_top2']}")
+
+# ================= P4·优先级三②：合规免责声明 =================
+st.markdown("---")
+st.caption("🤖 预测基于概率模型，仅供参考。足球反买，别墅靠海。")

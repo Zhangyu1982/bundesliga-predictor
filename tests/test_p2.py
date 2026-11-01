@@ -225,3 +225,26 @@ def test_fatigue_extra_time_extreme_penalty():
     cl3 = [dict(cl[0], score={"duration": "REGULAR"})]
     fe3 = FatigueEngine(bl1, cl3)
     assert fe3.analyze(bl1, [])["b1"]["home"]["prev_extra_time"] is False
+
+
+# ---------- P4：预测解释（Explainable AI）构建 ----------
+def test_build_explanation():
+    from app import _build_explanation
+    card = {
+        "pick": "拜仁慕尼黑胜", "home_team": "美因茨", "away_team": "拜仁慕尼黑",
+        "probabilities": {"home_win": 0.11, "draw": 0.17, "away_win": 0.72},
+        "score_top2": [{"score": "1:3", "prob": 0.077}, {"score": "1:4", "prob": 0.066}],
+        "injuries": {"home_key_out": [{"name": "布卡特", "importance": "核心"}], "away_key_out": [],
+                     "home_doubtful": [], "away_doubtful": []},
+        "injury_shift": {"home": 0.10, "away": 0.0},
+        "fatigue": {"home_prev_extra_time": True, "away_prev_extra_time": False,
+                    "home_rest_days": 3, "away_rest_days": 6,
+                    "cl_preceding_home": True, "cl_preceding_away": False},
+    }
+    txt = _build_explanation(card, "BL1")
+    assert "拜仁慕尼黑胜" in txt and "客队占优明显" in txt
+    assert "美因茨" in txt and "缺阵" in txt and "伤病偏移" in txt
+    assert "加时" in txt and "欧冠前置" in txt and "最可能比分 1:3" in txt
+    # 基准卡兜底
+    base = {"pick": "基准"}
+    assert "基准概率" in _build_explanation(base, "BL1")
