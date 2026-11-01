@@ -1,0 +1,216 @@
+{
+  "kind": "injury_shift_sensitivity",
+  "method": "合成伤病注入的敏感性/稳健性分析（非真实标签有监督标定）",
+  "data_source_note": "历史真实伤病名单不可用（football-data无伤病接口；TheSportsDB/Transfermarkt/Fotmob被阻断；ESPN德甲为空）。用固定seed合成伤病注入衡量系数稳健性。",
+  "games": 870,
+  "injection_rule": {
+    "max_core": 2,
+    "max_rotation": 2,
+    "max_sub": 1,
+    "seed": 2026,
+    "note": "每场每队均匀随机注入，模拟未知伤病名单"
+  },
+  "baseline": {
+    "key_out_shift": 0.1,
+    "doubtful_shift": 0.05,
+    "max_total_shift": 0.3,
+    "logloss": 1.0732
+  },
+  "best": {
+    "key_out_shift": 0.15,
+    "doubtful_shift": 0.03,
+    "importance_factor": [
+      1.0,
+      0.6,
+      0.3
+    ],
+    "logloss": 1.0715,
+    "hit_rate": 0.4828,
+    "delta_logloss_vs_baseline": -0.0017
+  },
+  "results": [
+    {
+      "key_out_shift": 0.15,
+      "doubtful_shift": 0.03,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0715,
+      "hit_rate": 0.4828,
+      "delta_logloss_vs_baseline": -0.0017
+    },
+    {
+      "key_out_shift": 0.15,
+      "doubtful_shift": 0.05,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0715,
+      "hit_rate": 0.4828,
+      "delta_logloss_vs_baseline": -0.0017
+    },
+    {
+      "key_out_shift": 0.15,
+      "doubtful_shift": 0.08,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0715,
+      "hit_rate": 0.4828,
+      "delta_logloss_vs_baseline": -0.0017
+    },
+    {
+      "key_out_shift": 0.12,
+      "doubtful_shift": 0.03,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0722,
+      "hit_rate": 0.4828,
+      "delta_logloss_vs_baseline": -0.001
+    },
+    {
+      "key_out_shift": 0.12,
+      "doubtful_shift": 0.05,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0722,
+      "hit_rate": 0.4828,
+      "delta_logloss_vs_baseline": -0.001
+    },
+    {
+      "key_out_shift": 0.12,
+      "doubtful_shift": 0.08,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0722,
+      "hit_rate": 0.4828,
+      "delta_logloss_vs_baseline": -0.001
+    },
+    {
+      "key_out_shift": 0.1,
+      "doubtful_shift": 0.03,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0732,
+      "hit_rate": 0.4839,
+      "delta_logloss_vs_baseline": 0.0
+    },
+    {
+      "key_out_shift": 0.1,
+      "doubtful_shift": 0.05,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0732,
+      "hit_rate": 0.4839,
+      "delta_logloss_vs_baseline": 0.0
+    },
+    {
+      "key_out_shift": 0.1,
+      "doubtful_shift": 0.08,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0732,
+      "hit_rate": 0.4839,
+      "delta_logloss_vs_baseline": 0.0
+    },
+    {
+      "key_out_shift": 0.08,
+      "doubtful_shift": 0.03,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0743,
+      "hit_rate": 0.4874,
+      "delta_logloss_vs_baseline": 0.0011
+    },
+    {
+      "key_out_shift": 0.08,
+      "doubtful_shift": 0.05,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0743,
+      "hit_rate": 0.4874,
+      "delta_logloss_vs_baseline": 0.0011
+    },
+    {
+      "key_out_shift": 0.08,
+      "doubtful_shift": 0.08,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0743,
+      "hit_rate": 0.4874,
+      "delta_logloss_vs_baseline": 0.0011
+    },
+    {
+      "key_out_shift": 0.05,
+      "doubtful_shift": 0.03,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0765,
+      "hit_rate": 0.492,
+      "delta_logloss_vs_baseline": 0.0033
+    },
+    {
+      "key_out_shift": 0.05,
+      "doubtful_shift": 0.05,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0765,
+      "hit_rate": 0.492,
+      "delta_logloss_vs_baseline": 0.0033
+    },
+    {
+      "key_out_shift": 0.05,
+      "doubtful_shift": 0.08,
+      "importance_factor": [
+        1.0,
+        0.6,
+        0.3
+      ],
+      "logloss": 1.0765,
+      "hit_rate": 0.492,
+      "delta_logloss_vs_baseline": 0.0033
+    }
+  ],
+  "conclusion": "合成伤病敏感性分析（非真实标签的有监督标定）：共 870 场、15 组系数组合。网格内 Log Loss 最优 1.0715（key_out=0.15, doubtful=0.03），经验值 0.10/0.05 的 Log Loss 为 1.0732。因无历史真实伤病名单数据源（TheSportsDB 403 / Transfermarkt Cloudflare / ESPN 德甲当前空），该差异系合成场景下的敏感性格局，不足以作为真实世界最优依据；故维持经验值并保持 calibrated=False（诚实黄牌），待拿到带伤病标签的历史数据后再据此表做有监督定稿。",
+  "calibrated": false,
+  "generated_at": "2026-11-01T19:22:42"
+}

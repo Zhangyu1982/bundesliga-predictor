@@ -171,7 +171,83 @@ def fetch_all_candidates() -> dict:
             "espn_injuries_count": len(structured), "news_candidates_count": len(news)}
 
 
+# =============================================================================
+# P1·数据源稳定性：本地 JSON 持久化兜底（用户点名）
+# 逻辑流：先尝试 ESPN 实时抓取 -> 成功则更新本地 injuries_backup.json
+#         -> 失败/超时自动降级读取本地 JSON 历史缓存，并给出黄色提示"当前使用本地缓存数据"。
+# 手动录入的伤病文本也实时保存回本 JSON（app.py 调用 save_backup 完成），刷新不丢失。
+# =============================================================================
+import os as _os
+import json as _json
+import datetime as _dt
+
+BACKUP_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "injuries_backup.json")
+
+
+def load_backup() -> dict:
+    """读取本地伤病缓存 JSON。不存在/损坏 → {}（不会抛异常）。"""
+    try:
+        with open(BACKUP_PATH, encoding="utf-8") as f:
+            return _json.load(f)
+    except Exception:
+        return {}
+
+
+def save_backup(payload: dict) -> None:
+    """写本地伤病缓存 JSON（含 ESPN 候选与手动录入）。失败静默（不影响主流程）。"""
+    try:
+        _os.makedirs(_os.path.dirname(BACKUP_PATH), exist_ok=True)
+        with open(BACKUP_PATH, "w", encoding="utf-8") as f:
+            _json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _espn_reachable() -> bool:
+    """探测 ESPN 实时接口是否可达（一次轻量 /injuries 请求）。失败/超时返回 False。
+    维护开关：环境变量 INJURY_FORCE_FALLBACK=1 时强制降级（用于测试/屏蔽ESPN场景验证本地兜底）。"""
+    if _os.environ.get("INJURY_FORCE_FALLBACK") == "1":
+        return False
+    return _get(f"{ESPN_BASE}/injuries", timeout=8) is not None
+
+
+def _live_fetch_candidates() -> dict | None:
+    """纯实时抓取（无副作用、可被 Streamlit @st.cache_data 缓存）。
+    成功 → {candidates, note, espn_injuries_count, news_candidates_count}；失败 → None。"""
+    if not _espn_reachable():
+        return None
+    return fetch_all_candidates()
+
+
+def fetch_with_fallback() -> dict:
+    """ESPN 实时抓取 + 本地 JSON 持久化兜底（P1·数据源稳定性）。
+    成功 → 更新本地 JSON，used_backup=False；
+    失败 → 降级读本地 JSON 历史缓存，used_backup=True（供 UI 显示黄色提示）。
+    返回：{candidates, note, espn_injuries_count, news_candidates_count, source, used_backup, updated_at}"""
+    now = _dt.datetime.now().isoformat(timespec="seconds")
+    live = _live_fetch_candidates()
+    if live is not None:
+        payload = {
+            "candidates": live["candidates"], "note": live["note"],
+            "espn_injuries_count": live["espn_injuries_count"],
+            "news_candidates_count": live["news_candidates_count"],
+            "source": "espn", "updated_at": now,
+        }
+        save_backup(payload)
+        return {**payload, "used_backup": False}
+    bk = load_backup()
+    cands = bk.get("candidates", [])
+    used = bool(cands)
+    if used:
+        note = f"{bk.get('note','')}（⚠️ ESPN 抓取失败，当前使用本地缓存数据 · 缓存于 {bk.get('updated_at','?')}）"
+    else:
+        note = "ESPN 抓取失败且本地无历史缓存，请使用下方手动录入伤病。"
+    return {"candidates": cands, "note": note, "espn_injuries_count": 0,
+            "news_candidates_count": 0, "source": "backup", "used_backup": used,
+            "updated_at": bk.get("updated_at", now)}
+
+
 if __name__ == "__main__":
-    import json
-    res = fetch_all_candidates()
-    print(json.dumps(res, ensure_ascii=False, indent=2))
+    import json as _j
+    res = fetch_with_fallback()
+    print(_j.dumps(res, ensure_ascii=False, indent=2))

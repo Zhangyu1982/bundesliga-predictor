@@ -78,13 +78,16 @@ FOOTBALL_DATA_TOKEN=xxx streamlit run app.py --server.headless true --server.por
 | R1/R4 | `RULES` | consecutive3 / Δp0.10 | ✅ 已标定 |
 > **微调纪律**：任何改 `calibrated=False` 的参数必须同步保留黄牌标注；标定需历史回测支撑（见 2.4）。
 
-## 2.4 历史回测 / 重生成报告
+## 2.4 历史回测 / 重生成报告 / 模型标定
 ```bash
 python3 scripts/backtest.py              # 918 场 walk-forward → 写 bias.db + 日志
 python3 scripts/backtest_report.py       # 生成静态 data/backtest_report.json（页面只读渲染）
 python3 scripts/calibrate_fatigue.py     # 疲劳系数真实标定（已跑，勿随意覆盖）
+python3 scripts/calibrate_injury.py      # injury_shift 敏感性标定 → data/calibration_report.json
 ```
 回测看板**只在本地跑，不塞进主应用**，避免每次交互重算拖慢页面。
+injury_shift：因无历史真实伤病名单数据源（TheSportsDB 403/Transfermarkt Cloudflare/ESPN 德甲空），
+脚本做**合成伤病注入的敏感性分析**，结论是系数对整体质量影响极小 → 维持经验值，**calibrated 保持 False（诚实黄牌）**，不造假。
 
 ## 2.5 新增联赛
 - football-data 免费层各赛事代码见 `config.COMPETITIONS`（BL1/CL 可用；EL/DFB 403 需付费）。
@@ -104,6 +107,14 @@ python3 scripts/calibrate_fatigue.py     # 疲劳系数真实标定（已跑，�
 | 卡片显示种子对阵（非真实） | 缺 `FOOTBALL_DATA_TOKEN` 或触发限流回退种子，检查 Secrets/等窗口重置 |
 | "当前请求过载"红条 | 免费层 1 分钟配额用完，等 60s 再点 |
 | 本地 st.bar_chart/st.table 报 pyarrow 需 NumPy2.0 | 本机 NumPy 1.26，规避——页面已改 HTML 内联条形 / Markdown 表 |
+| 想验证"ESPN被屏蔽时本地兜底" | 设 `INJURY_FORCE_FALLBACK=1` 启动 → 点抓取会降级读本地 JSON 并黄提示（维护/测试开关，默认关闭） |
+| 伤病刷新后丢失 | 不会——手动录入实时保存到 `data/injuries_backup.json`（已 gitignore，不入库），刷新自动载入 |
+
+**P5 优化（P0 缓存/ P1 本地兜底/ P2 敏感性标定/ P3 移动端卡片）**：
+- P0：football-data 缓存 TTL=3600s、ESPN TTL=1800s；`st.session_state`+按钮防抖 disabled 已完备，刷新/切换选项不再消耗外部 API 额度。
+- P1：ESPN 抓取成功 → 写本地 `injuries_backup.json`；失败 → 降级读本地缓存并黄提示"当前使用本地缓存数据"；手动录入 on_change 实时保存回 JSON。
+- P2：侧边栏「模型历史表现」（命中率/爆冷/赛季/injury_shift 敏感性），ROI 因无历史赔率如实标注不可算；`data/calibration_report.json` 已生成。
+- P3：9 场速览改 `st.container(border=True)` 卡片 + `st.progress` 概率条（移动端无需横向滑动）；伤病核心**红**/轮换**橙**/替补**灰**高亮。
 
 ---
 

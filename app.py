@@ -9,7 +9,8 @@
 """
 import streamlit as st
 from pipeline import PredictionPipeline
-from data.injury_fetch import fetch_all_candidates
+from data.injury_fetch import (fetch_all_candidates, _live_fetch_candidates,
+                               load_backup, save_backup)
 
 DISCLAIMER = ("本系统输出为概率推演，不构成投注建议。比分 Top2 是分布最集中区域，不代表确定结果。"
               "伤病与国家队负荷在赛前 48 小时仍可能显著变动，初版与确认版之间的差异是系统的设计特性，不是缺陷。")
@@ -102,6 +103,24 @@ def _fmt_inj(lst) -> str:
     return "、".join(parts) or "—"
 
 
+# 伤病重要性颜色映射（P3·移动端视觉高亮）：核心=红 / 轮换=橙 / 替补=灰
+_INJ_COLOR = {"核心": "red", "轮换": "orange", "替补": "gray"}
+
+
+def _fmt_inj_colored(lst) -> str:
+    """伤病列表 → Streamlit 彩色 Markdown：核心伤缺标红、轮换橙、替补灰。"""
+    parts = []
+    for e in lst or []:
+        if isinstance(e, dict):
+            nm = e.get("name", "")
+            imp = e.get("importance", "核心")
+            color = _INJ_COLOR.get(imp, "red")
+            parts.append(f":{color}[**{nm}**（{imp}）]")
+        else:
+            parts.append(str(e))
+    return "、".join(parts) or "—"
+
+
 def _build_explanation(c: dict, comp: str) -> str:
     """预测解释（P4·优先级二①）：基于真实卡片数据生成可读理由，不虚构 xG/裁判。
     覆盖：推荐方向与概率结构、伤病（按重要性加权偏移）、疲劳（休息不足/加时赛/欧冠前置轮换）。"""
@@ -120,10 +139,10 @@ def _build_explanation(c: dict, comp: str) -> str:
         parts.append(f"主队略占优（主胜 {p['home_win']:.0%} vs 客胜 {p['away_win']:.0%}）")
     else:
         parts.append(f"客队略占优（客胜 {p['away_win']:.0%} vs 主胜 {p['home_win']:.0%}）")
-    # 伤病：按重要性加权的偏移
+    # 伤病：按重要性加权的偏移（P3：核心红/轮换橙/替补灰 彩色高亮）
     inj = c.get("injuries", {})
-    hk = _fmt_inj(inj.get("home_key_out", []))
-    ak = _fmt_inj(inj.get("away_key_out", []))
+    hk = _fmt_inj_colored(inj.get("home_key_out", []))
+    ak = _fmt_inj_colored(inj.get("away_key_out", []))
     if hk != "—":
         parts.append(f"{c['home_team']} 缺阵 {hk}")
     if ak != "—":
@@ -182,8 +201,8 @@ def get_pipeline():
 
 pipe = get_pipeline()
 
-# ============ P4·优先级一①：@st.cache_data(ttl=600) 缓存所有外部 API（football-data / ESPN） ============
-# 同一赛事同一轮 / 同一赛事全部赛程 / ESPN 伤病，10 分钟内只消耗 1 次 API 额度。
+# ============ P4·优先级一① + P0：@st.cache_data 缓存所有外部 API（football-data / ESPN） ============
+# football-data TTL=3600（1小时）、ESPN TTL=1800（30分钟）——相同参数下前端刷新不消耗外部 API 额度。
 # 参数均为字符串（可 hash，规避 pandas/complex-dict 缓存报错）；返回 list/dict 均可 pickle。
 # 用实例属性保存"原始方法"，只在首次运行时捕获，避免每次重跑把已缓存方法当作原始方法而嵌套。
 # 零密钥种子源（测试/无 token）无 fetch_competition_round → 跳过补丁（它本无外部网络请求）。
@@ -194,15 +213,15 @@ if hasattr(pipe.provider, "fetch_competition_round") and hasattr(pipe.provider, 
     _p4_orig_fr, _p4_orig_fm = pipe.provider._p4_orig
 
 
-    @st.cache_data(ttl=600, show_spinner=False)
+    @st.cache_data(ttl=3600, show_spinner=False)
     def _cached_fr(comp: str, round_no: int) -> list:
-        """缓存某一赛事某一轮对阵（德甲 BL1 / 欧冠 CL）。"""
+        """缓存某一赛事某一轮对阵（德甲 BL1 / 欧冠 CL）· TTL=1小时。"""
         return _p4_orig_fr(comp, round_no)
 
 
-    @st.cache_data(ttl=600, show_spinner=False)
+    @st.cache_data(ttl=3600, show_spinner=False)
     def _cached_fm(comp: str) -> list:
-        """缓存某一赛事全部比赛（疲劳特征用）。"""
+        """缓存某一赛事全部比赛（疲劳特征用）· TTL=1小时。"""
         return _p4_orig_fm(comp)
 
 
@@ -210,10 +229,31 @@ if hasattr(pipe.provider, "fetch_competition_round") and hasattr(pipe.provider, 
     pipe.provider.fetch_competition_matches = _cached_fm
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def _cached_espn() -> dict:
-    """缓存 ESPN 伤病+新闻候选（10 分钟内不重复请求 ESPN）。"""
-    return fetch_all_candidates()
+@st.cache_data(ttl=1800, show_spinner=False)
+def _cached_espn() -> dict | None:
+    """缓存 ESPN 实时抓取结果（30 分钟内不重复请求 ESPN）；失败返回 None（调用层降级读本地 JSON）。"""
+    return _live_fetch_candidates()
+
+
+def _espn_fetch_with_fallback():
+    """P1·数据源稳定性：ESPN 实时抓取(缓存) → 成功则更新本地 JSON；失败降级读本地 JSON 并给黄提示。
+    返回 (payload, used_backup)。写文件副作用留在本调用层，缓存只包住无副作用的实时抓取。"""
+    import datetime
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    live = _cached_espn()
+    if live is not None:
+        payload = {**live, "source": "espn", "updated_at": now}
+        save_backup(payload)
+        return payload, False
+    bk = load_backup()
+    cands = bk.get("candidates", [])
+    used = bool(cands)
+    if used:
+        note = f"{bk.get('note','')}（⚠️ ESPN 抓取失败，当前使用本地缓存数据 · 缓存于 {bk.get('updated_at','?')}）"
+    else:
+        note = "ESPN 抓取失败且本地无历史缓存，请使用下方手动录入伤病。"
+    return {"candidates": cands, "note": note, "espn_injuries_count": 0,
+            "news_candidates_count": 0, "source": "backup", "updated_at": bk.get("updated_at", now)}, used
 
 
 # P4·优先级二①：运气回归特征（近5场 射正HST代理 vs 实际进球），读 2526 赛季历史 CSV（已入库部署）。
@@ -252,6 +292,11 @@ ss.setdefault("competition", "BL1")
 ss.setdefault("manual_injuries", "")
 ss.setdefault("auto_candidates", None)   # [{player, team_code, team_name, status, source, context}]
 ss.setdefault("auto_note", "")
+ss.setdefault("used_backup", False)
+# P1·本地持久化兜底：刷新时自动载入上一次成功保存的手动录入（若当前为空且本地有历史）
+_bk0 = load_backup()
+if not ss["manual_injuries"] and _bk0.get("manual_injuries"):
+    ss["manual_injuries"] = _bk0["manual_injuries"]
 
 # ---------- 跨赛事切换器（P2·跨赛事） ----------
 from config import COMPETITIONS, FATIGUE_RULES
@@ -269,19 +314,20 @@ with col_s:
 
 # ---------- 伤病获取：ESPN 自动抓取 + 手动录入兜底 ----------
 with st.expander("🏥 伤病获取（ESPN 自动抓取 + 手动录入兜底）"):
-    # 方案三：ESPN 自动抓取伤病候选（国内直连，无 token）——@st.cache_data(600s) + 异常兜底
+    # 方案三：ESPN 自动抓取伤病候选（国内直连，无 token）——@st.cache_data(1800s) + 本地 JSON 兜底
     if st.button("🔎 自动抓取伤病候选（ESPN 国内直连）",
                  disabled=ss.get("_running", False)):
         with st.spinner("正在抓取 ESPN 伤病接口 + 德甲新闻……"):
             try:
-                res = _cached_espn()
+                res, used_backup = _espn_fetch_with_fallback()
             except Exception:
                 st.error("⚠️ 当前请求过载，请 1 分钟后再试。")
                 st.stop()
             ss["auto_candidates"] = res["candidates"]
             ss["auto_note"] = res["note"]
+            ss["used_backup"] = used_backup
     if ss["auto_note"]:
-        st.info(ss["auto_note"])
+        (st.warning if ss.get("used_backup") else st.info)(ss["auto_note"])
     if ss["auto_candidates"]:
         st.markdown("**勾选要纳入确认版复算的伤病候选，并为每个球员标注重要性（核心/轮换/替补，影响 injury_shift）：**")
         for i, c in enumerate(ss["auto_candidates"]):
@@ -298,11 +344,20 @@ with st.expander("🏥 伤病获取（ESPN 自动抓取 + 手动录入兜底）"
         st.caption("（尚未抓取 / 当前 ESPN 无德甲伤病记录 → 请用下方手动录入）")
     st.divider()
     st.markdown("**手动录入（兜底）**　格式：`队名: 缺阵球员,存疑球员?`；重要性用 `球员[轮换]` 标注。　例：`拜仁: 凯恩[核心],穆夏拉[轮换],格纳布里?[替补]`")
+
+    def _persist_manual():
+        import datetime
+        bk = load_backup()
+        bk["manual_injuries"] = st.session_state.get("manual_injuries", "")
+        bk["manual_updated_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+        save_backup(bk)
+
     ss["manual_injuries"] = st.text_area(
         "伤病名单（空 = 无实时伤病，确认版将被拦截）", ss["manual_injuries"],
-        height=80, placeholder="美因茨: 布卡特[核心]\n拜仁: 凯恩,穆夏拉[轮换]")
+        height=80, placeholder="美因茨: 布卡特[核心]\n拜仁: 凯恩,穆夏拉[轮换]",
+        on_change=_persist_manual)
     if ss["manual_injuries"].strip():
-        st.success("✅ 已录入伤病，确认版复算将启用（R2 injury_shift 按球员重要性加权，未标定）")
+        st.success("✅ 已录入伤病（实时保存到本地 JSON，刷新不丢失），确认版复算将启用（R2 injury_shift 按球员重要性加权，未标定）")
 
 # 数据源能力说明
 auto_has = bool(ss["auto_candidates"]) and any(st.session_state.get(f"cand_{i}", False)
@@ -356,18 +411,21 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
 
     # ---------- 本轮推荐速览表（顶部，便于一键截图；用 Markdown 表格，避免 pyarrow/NumPy 兼容问题） ----------
     if not result.get("comp_unavailable") and cards:
-        header = "| # | 对阵 | 主胜 | 平 | 客胜 | 推荐比分 | 推荐 | 阶段 |"
-        sep = "|---|------|----|----|------|------|------|------|"
-        rows = []
+        # P3·移动端：卡片式布局替代宽表格（st.container border + st.progress，无需横向滑动）
+        st.markdown("### 📋 本轮推荐速览（胜平负 + 推荐比分）")
         for idx, c in enumerate(cards, 1):
             p = c["probabilities"]
             top = c["score_top2"][0]["score"] if c.get("score_top2") else "—"
-            rows.append(f"| {idx} | {c['home_team']} vs {c['away_team']} "
-                        f"| {p['home_win']:.2f} | {p['draw']:.2f} | {p['away_win']:.2f} "
-                        f"| **{top}** | {c['pick']} | {c['stage']} |")
-        st.markdown("### 📋 本轮推荐速览（胜平负 + 推荐比分）")
-        st.markdown("\n".join([header, sep] + rows))
-        st.caption("胜/平/负为概率；推荐比分取 Top1（分布最集中区域）。截图保存后点开下方卡片可看细节。")
+            pick = c["pick"]
+            with st.container(border=True):
+                hl, hr = st.columns([3, 1])
+                hl.markdown(f"**{idx}. {c['home_team']} vs {c['away_team']}**")
+                hr.markdown(f"阶段 `{c['stage']}`", help="初版=基准；确认版=含伤病复算")
+                st.markdown(f"推荐 **{pick}** · 预测比分 `{top}`")
+                st.progress(p["home_win"], text=f"主胜 {p['home_win']:.0%}")
+                st.progress(p["draw"], text=f"平局 {p['draw']:.0%}")
+                st.progress(p["away_win"], text=f"客胜 {p['away_win']:.0%}")
+        st.caption("胜/平/负为概率；预测比分取 Top1（分布最集中区域）。点开下方卡片可看伤病/解释等细节。")
 
     # 确认版被拦截的整体提示
     blocked = [c for c in cards if c.get("confirm_blocked")]
@@ -434,7 +492,12 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
             st.markdown(f"**比分 Top2**　" + "　".join(f"`{s['score']}`({s['prob']})" for s in c["score_top2"]))
             st.markdown(f"**让球**　`{c['handicap_direction']['line']}` · 谨慎度 `{c['handicap_direction']['caution']}`")
             st.markdown(f"**数据**　{c['data_availability']} · 伤病 "
-                        f"主缺阵[{_fmt_inj(c['injuries'].get('home_key_out',[]))}] / 客缺阵[{_fmt_inj(c['injuries'].get('away_key_out',[]))}]")
+                        f"主缺阵[{_fmt_inj_colored(c['injuries'].get('home_key_out',[]))}] / "
+                        f"客缺阵[{_fmt_inj_colored(c['injuries'].get('away_key_out',[]))}]"
+                        f"（<span style='color:#dc2626'>红</span>=核心 · "
+                        f"<span style='color:#ea580c'>橙</span>=轮换 · "
+                        f"<span style='color:#6b7280'>灰</span>=替补）",
+                        unsafe_allow_html=True)
             st.markdown(f"**风险**　{c['risk_note']}")
             # P4·优先级二①：预测解释（Explainable AI）——每卡底部可读理由
             st.markdown(_build_explanation(c, ss["competition"]))
@@ -452,6 +515,43 @@ def _backtest_report() -> dict:
             return json.load(f)
     except Exception:
         return {}
+
+
+@st.cache_resource
+def _calibration_report() -> dict:
+    """P2·injury_shift 敏感性标定报告（静态 JSON，只读渲染）。"""
+    import json, os
+    p = os.path.join(os.path.dirname(__file__), "data", "calibration_report.json")
+    try:
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+# ================= P2③：侧边栏「模型历史表现」页签（胜率/爆冷/标定摘要；ROI 因无历史赔率如实标注不可算） =================
+with st.sidebar:
+    st.header("📊 模型历史表现")
+    btrep = _backtest_report()
+    if btrep:
+        st.metric("方向命中率", f"{btrep.get('direction_accuracy', 0) * 100:.1f}%")
+        st.metric("爆冷率", f"{btrep.get('upset_rate', 0) * 100:.1f}%")
+        st.metric("回测场次", btrep.get("games", "—"))
+        ssum = btrep.get("season_summary", [])
+        if ssum:
+            st.caption("按赛季：" + " · ".join(f"{s['season']} {s['acc'] * 100:.0f}%" for s in ssum))
+        div = btrep.get("divergence", {})
+        st.caption(f"Elo/DC分歧场爆冷 {div.get('div_upset', 0) * 100:.1f}% vs 一致场 {div.get('no_div_upset', 0) * 100:.1f}%")
+    else:
+        st.caption("（回测报告未生成，本地跑 scripts/backtest_report.py）")
+    st.divider()
+    cal = _calibration_report()
+    if cal:
+        st.markdown("**injury_shift 敏感性**（合成场景，非真实标定）")
+        st.caption(f"{cal.get('games', '—')} 场 · 网格内 Log Loss 差 {cal.get('baseline', {}).get('logloss', '—')} → "
+                   f"{cal.get('best', {}).get('logloss', '—')}，差异极小")
+        st.caption("⚠️ 无历史真实伤病名单 → 维持经验值，**calibrated=False**（诚实黄牌）")
+    st.caption("ROI：数据源无历史赔率，无法真实计算（未虚构）")
 
 
 with st.expander("📊 历史回测看板（近3赛季 · 918场 walk-forward · 静态结果）"):
