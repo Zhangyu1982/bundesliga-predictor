@@ -1,17 +1,112 @@
-# 德甲预测机器人 · P1 历史数据重训版
+# 德甲预测机器人 · P1–P4 完整版（概率推演系统）
 
+> 状态：**P0 种子 → P1 历史重训 → P2 真实数据/跨赛事/伤病 → P3 回测闭环 → P4 性能/解释/UI/模型微调 全部完成**
+> 部署：Streamlit Cloud 公网（push main → 自动重部署，链接不变）
+>
 > 边界声明：本系统输出为概率推演，不构成投注建议。比分 Top2 是分布最集中区域，不代表确定结果。
 > 伤病与国家队负荷在赛前 48 小时仍可能显著变动，初版与确认版之间的差异是系统的设计特性，不是缺陷。
 
-## 运行（本地）
+---
 
+# 📖 一、日常使用 SOP（周末实战怎么用）
+
+## 1.1 打开系统
+1. 浏览器打开公网地址（链接固定不变）：
+   `https://bundesliga-predictor-wmqwjphqxotytzxohqpa85.streamlit.app`
+2. 若打开是"Manage app / 加载中"，说明 Streamlit Cloud 免费版正在冷启动或自动重部署，**等 2–5 分钟刷新即可**，无需任何操作。
+
+## 1.2 一次完整的预测流程（6 步）
+| 步骤 | 操作 | 说明 |
+|---|---|---|
+| ① | 顶部选「赛事」 | 德甲 / 欧冠可用；欧联/德国杯免费层 403 会诚实提示，不选即可 |
+| ② | 选「轮次」 | 当前最新轮；过旧轮次会走 GBM→DC 兜底输出基准概率 |
+| ③ | 选「阶段」 | 初版（立即出预测）；确认版（需赛前 48h 真实伤病，会先拦提示） |
+| ④ | 点「生成预测」 | 顶部 spinner 期间按钮已禁用防连点；约几秒出 9 场 |
+| ⑤ | 看「本轮推荐速览表」 | 9 场胜平负 + 推荐比分 + 推荐方向 + 阶段，一目了然 |
+| ⑥ | 点开折叠卡片看细节 | 每场：伤病偏移、疲劳折扣、📈 触底反弹、让球、预测解释、model_breakdown |
+
+## 1.3 读懂卡片与标签
+- **推荐胜平负**：主胜/平/客胜三概率，取最大者为推荐（如"拜仁慕尼黑胜 71%"）。
+- **比分 Top2**：分布最集中的两个比分，非确定结果。
+- **让球/谨慎度**：负让球=看好强队；"中高"表示 R4 分歧或伤病影响，注意风险。
+- **预测解释（Explainable AI）**：卡片底部一段人话，说明模型为什么这么看——含伤病缺阵、疲劳/加时赛、欧冠前置、📈 触底反弹、战意不足扣 xG 等。
+- **黄牌标记**：⚠️ "伤病偏移量未标定""未实时校准"= 该系数是规则化设定，仅供参考，不构成投注依据。
+- **📈 进攻端触底反弹**：该队近 5 场机会创造强（射正高）但进球少（高 xG 低转化），模型微调上调其预期进球权重。
+
+## 1.4 伤病录入（确认版才需要）
+1. 点「🔎 自动抓取伤病候选（ESPN国内直连）」→ 抓到的球员渲染为勾选框。
+2. 一键勾选伤停球员 → 点生成（确认版）→ 自动折入 injury_shift 复算。
+3. ESPN 当前无伤病记录时诚实提示，**落回手动录入**：按 `队名: 球员名` 换行输入（支持简称/全名）。
+> 免费层无真 xG，用「射正 HST 代理」诚实标注；不虚拟数据。
+
+## 1.5 历史回测看板
+页面底部「📊 历史回测看板」：918 场 walk-forward 静态结果（方向命中率 52.4%、爆冷率 22.2%、按轮次/按赛季命中曲线、Elo/DC 分歧效应）。**只读展示，不实时重算**，不会拖慢主页面。
+
+## 1.6 常见问答
+- **疯狂刷新会不会烧 API？** 不会。10 分钟内同一轮次/赛事命中 `@st.cache_data` 本地缓存，只消耗 1 次额度；按钮已防抖。
+- **超限会怎样？** 前端显示红条"当前请求过载，请 1 分钟后再试"，不会抛代码堆栈。
+- **预测准吗？** 历史回测方向命中约 52–55%，爆冷率约 22%。概率推演，仅供参考，**足球反买，别墅靠海**。
+
+---
+
+# 🛠 二、部署维护指南（给开发者/维护者）
+
+## 2.1 本地运行
 ```bash
 pip install -r requirements.txt
-streamlit run app.py        # 首次运行自动训练并缓存模型；之后快速加载
-python3 -m pytest tests/     # 11 项验收测试（P0 5 + P1 6）
+python3 -m pytest tests/                 # 40 项测试（P0–P4）
+FOOTBALL_DATA_TOKEN=xxx streamlit run app.py --server.headless true --server.port 8504
 ```
+首次运行自动训练并缓存 `artifacts/models.pkl`；之后快速加载。
 
-## P1 历史数据灌入与模型重训（核心）
+## 2.2 部署原理（Streamlit Cloud）
+- 仓库：`github.com/Zhangyu1982/bundesliga-predictor`（已公开）。
+- **改代码 → commit → push main → Streamlit Cloud 自动重部署，公网链接不变**。
+- 敏感配置走 **Secrets 注入**（`.streamlit/secrets.toml` 已 .gitignore，勿入库）：
+  - `FOOTBALL_DATA_TOKEN`（football-data.org 免费层，10 req/min）
+  - 推送时若本地 remote 为干净 URL，可用一次性 `git push https://<user>:<PAT>@github.com/... main` 带凭据，推完恢复干净 URL；PAT 勿入库。
+- 免费版冷启动/重部署较慢属正常（2–8 分钟），期间显示 Manage/加载页，等即可。
+
+## 2.3 参数微调（最常用）
+所有阈值集中在 `config.py`，改一处即生效：
+| 参数 | 位置 | 当前值 | calibrated |
+|---|---|---|---|
+| 伤病偏移 | `injury_shift` | 缺阵0.10/存疑0.05/上限0.30 | ❌ 未标定（黄牌） |
+| 运气回归 | `LUCK_REGRESSION` | window5 / gap_z0.7 / boost0.06 | ❌ 未标定（黄牌） |
+| 战意规则 | `MOTIVATION_RULES` | 欧冠前3天+对手低5名→扣0.15xG | ❌ 未标定（黄牌） |
+| 疲劳 | `FATIGUE_RULES` | 单日1.4%/封顶4%/轮换2%/加时6% | ✅ 已标定 |
+| R1/R4 | `RULES` | consecutive3 / Δp0.10 | ✅ 已标定 |
+> **微调纪律**：任何改 `calibrated=False` 的参数必须同步保留黄牌标注；标定需历史回测支撑（见 2.4）。
+
+## 2.4 历史回测 / 重生成报告
+```bash
+python3 scripts/backtest.py              # 918 场 walk-forward → 写 bias.db + 日志
+python3 scripts/backtest_report.py       # 生成静态 data/backtest_report.json（页面只读渲染）
+python3 scripts/calibrate_fatigue.py     # 疲劳系数真实标定（已跑，勿随意覆盖）
+```
+回测看板**只在本地跑，不塞进主应用**，避免每次交互重算拖慢页面。
+
+## 2.5 新增联赛
+- football-data 免费层各赛事代码见 `config.COMPETITIONS`（BL1/CL 可用；EL/DFB 403 需付费）。
+- 新增：`config.COMPETITIONS` 加条目 + `LEAGUE_NAME2CODE`/跨赛事 Elo 兜底 → 赛事切换器自动出现；受限赛事如实标注"免费层403"。
+- 历史 CSV（新联赛）放入 `data/historical/D1_<赛季>.csv`，`historical_data.load_seasons` 自动并入。
+
+## 2.6 数据源与限流
+- 赛程/积分：football-data.org v4（`FOOTBALL_DATA_TOKEN`）。
+- 伤病：ESPN 国内直连（`site.api.espn.com`）自动 + 手动兜底；免费层无真 xG → 射正 HST 代理。
+- 免费层 **10 req/min**：`data_stores/cache.py` 从响应头读 `x-requests-available-minute` 动态拦截防 403；429 需等 60s。
+- 已实测死路（勿重试）：TheSportsDB 403、Transfermarkt Cloudflare、Fotmob 404、新浪 403、GoogleNews 超时、懂球帝 567、UECL 404。
+
+## 2.7 常见故障排查
+| 现象 | 处理 |
+|---|---|
+| 公网显示 Manage/加载 | Streamlit Cloud 免费版冷启动/重部署，等 2–8 分钟 |
+| 卡片显示种子对阵（非真实） | 缺 `FOOTBALL_DATA_TOKEN` 或触发限流回退种子，检查 Secrets/等窗口重置 |
+| "当前请求过载"红条 | 免费层 1 分钟配额用完，等 60s 再点 |
+| 本地 st.bar_chart/st.table 报 pyarrow 需 NumPy2.0 | 本机 NumPy 1.26，规避——页面已改 HTML 内联条形 / Markdown 表 |
+
+---
+
 
 - **数据源**：football-data.co.uk 德甲(D1) 近 3 赛季 CSV → `data/historical/{D1_2526,D1_2425,D1_2324}.csv`（各 306 场，共 918+）。
 - **清洗**：`data/historical_data.py`（`load_seasons` + `add_rolling_features`：近3轮积分、滚动进球/射正、H2H）。
