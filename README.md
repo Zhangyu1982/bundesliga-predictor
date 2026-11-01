@@ -250,6 +250,7 @@ UI（app.py）：保留手动录入框，新增 **"🔎 自动抓取伤病候选
 
 运行 `python3 scripts/backtest.py` 对 3 赛季 918 场 walk-forward 回溯，结果：
 - **R5 记录库**：`data_stores/bias.db`（bias_predictions 表，918 条）存储"历史结果 vs 预测结果"比对；命中率 52.4%，Elo/DC 分歧率 35.9%。
+- **真实赛果持久化（P6）**：`bias.db` 为运行时库（`*.db` 不入库，云端重部署重建为空）。真实赛果经 `scripts/record_live_result.py` **同时写入** `data/live_results.json`（静态、入库），app 启动经 `data.live_results.merge_with_bias()` 与 bias.db 历史合并，保证 R1 偏差记录与 R5 连续跟踪在公网端真正生效；侧边栏「真实赛果记录」展示实战场次与命中。
 - **R1 实测标定**：基线方向错误率 47.6%；连续 3 轮同方向偏差后下轮仍错率 64.4%（n=45，+16.8pp）→ `consecutive_rounds=3`，`calibrated=True`。
 - **R4 实测标定**：基线爆冷率 22.2%；Elo/DC 分歧场爆冷率 30.0%（一致仅 17.9%）；Δp≥0.10 后爆冷率抬升至 24%+ → `submodel_disagreement_threshold=0.10`（实数，代码已实际使用），`calibrated=True`。
 

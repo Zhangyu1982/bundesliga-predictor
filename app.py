@@ -532,6 +532,16 @@ def _calibration_report() -> dict:
         return {}
 
 
+# ================= P6：真实赛果（live_results.json 入库 + 与 bias.db 历史合并） =================
+@st.cache_resource
+def _live_results_records() -> tuple:
+    """P6·真实赛果：live_results.json（入库、公网可持久）+ 与 bias.db 历史合并。
+    bias.db 为运行时库（不入库，云端重建为空），故真实赛果以入库 JSON 为准。"""
+    from data.live_results import load_live_results, merge_with_bias
+    lr = load_live_results()
+    return lr, merge_with_bias(lr)
+
+
 # ================= P2③：侧边栏「模型历史表现」页签（胜率/爆冷/标定摘要；ROI 因无历史赔率如实标注不可算） =================
 with st.sidebar:
     st.header("📊 模型历史表现")
@@ -554,6 +564,20 @@ with st.sidebar:
         st.caption(f"{cal.get('games', '—')} 场 · 网格内 Log Loss 差 {cal.get('baseline', {}).get('logloss', '—')} → "
                    f"{cal.get('best', {}).get('logloss', '—')}，差异极小")
         st.caption("⚠️ 无历史真实伤病名单 → 维持经验值，**calibrated=False**（诚实黄牌）")
+    st.divider()
+    lr, merged = _live_results_records()
+    if lr:
+        hits = sum(1 for r in lr if r.get("pred_hit") == 1)
+        st.markdown("**🏁 真实赛果记录**（live_results.json 入库）")
+        st.caption(f"{len(lr)} 场实战 · 方向命中 {hits}/{len(lr)}"
+                   f"（与 bias.db 历史合并共 {len(merged)} 条）")
+        for r in lr[-3:]:
+            mark = "✅" if r.get("pred_hit") == 1 else "❌"
+            st.caption(f"{r.get('season')} R{r.get('round_no')} {r.get('home')} "
+                       f"{r.get('actual_hg')}-{r.get('actual_ag')} {r.get('away')} · "
+                       f"预测{r.get('pred_pick')} {mark}")
+    else:
+        st.caption("🏁 暂无真实赛果记录（新赛果经 scripts/record_live_result.py 记录并推送）")
     st.caption("ROI：数据源无历史赔率，无法真实计算（未虚构）")
 
 

@@ -1,0 +1,24 @@
+{
+  "updated_at": "2026-11-02T00:40:58",
+  "records": [
+    {
+      "season": "2627",
+      "round_no": 8,
+      "match_id": "BUN_2627_R08_Union Berlin_FC Koln_LIVE",
+      "home": "Union Berlin",
+      "away": "FC Koln",
+      "actual_hg": 1,
+      "actual_ag": 1,
+      "actual_ftr": "D",
+      "pred_home": 0.442,
+      "pred_draw": null,
+      "pred_away": null,
+      "pred_pick": "home_win",
+      "pred_hit": 0,
+      "elo_dir": "home_win",
+      "dc_dir": "away_win",
+      "divergence": 1,
+      "bias_streak": 0
+    }
+  ]
+}

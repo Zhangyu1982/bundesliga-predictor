@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""记录真实比赛结果到 R1 偏差数据库（data_stores/bias.db）。
+"""记录真实比赛结果到 R1 偏差数据库（data_stores/bias.db）+ 入库 JSON（data/live_results.json）。
 
 用于把真实踢完的比赛结果 + 赛前初版预测比对写入记录库（与 scripts/backtest.py
 的 walk-forward 回测记录同表，但用真实赛季号，避免与回测模拟轮次混淆）。
+bias.db 为运行时库（*.db 不入库，云端重建为空）；同时写入 data/live_results.json
+（静态、入库），保证真实赛果在公网端持久可见并可合并。
 
 用法示例（记录一场真实赛果）：
   python3 scripts/record_live_result.py \\
@@ -22,6 +24,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from data_stores.bias_store import BiasStore, DB_PATH  # noqa: E402
+from data.live_results import load_live_results, save_live_results  # noqa: E402
 
 
 def _auto_pred_hit(pick: str | None, ftr: str | None) -> int:
@@ -32,8 +35,8 @@ def _auto_pred_hit(pick: str | None, ftr: str | None) -> int:
     return 1 if mapping.get(pick) == ftr else 0
 
 
-def record(rec: dict, db_path: str = DB_PATH) -> int:
-    """写一条真实比对记录；缺省字段补齐默认，缺失概率保留 NULL。"""
+def record(rec: dict, db_path: str = DB_PATH, live_path: str | None = None) -> int:
+    """写一条真实比对记录；同时写入 bias.db 与 live_results.json（入库）。"""
     rec.setdefault("pred_draw", None)
     rec.setdefault("pred_away", None)
     rec.setdefault("bias_streak", 0)
@@ -41,7 +44,11 @@ def record(rec: dict, db_path: str = DB_PATH) -> int:
     rec.setdefault("dc_dir", None)
     rec.setdefault("divergence", 0)
     rec.setdefault("pred_hit", _auto_pred_hit(rec.get("pred_pick"), rec.get("actual_ftr")))
-    return BiasStore(db_path).write_records([rec])
+    n = BiasStore(db_path).write_records([rec])
+    # 同步写入库 JSON：按 match_id 去重替换，保留既有真实赛果
+    existing = [r for r in load_live_results(live_path) if r.get("match_id") != rec.get("match_id")]
+    save_live_results(existing + [rec], path=live_path)
+    return n
 
 
 def main() -> None:
