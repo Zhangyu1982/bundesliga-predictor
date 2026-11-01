@@ -26,38 +26,48 @@ def _parse_date(s: str) -> datetime | None:
         return None
 
 
+def _is_extra_time(m: dict) -> bool:
+    """是否打满 120 分钟（加时/点球）。football-data.org score.duration ∈ {EXTRA_TIME, PENALTY_SHOOTOUT}，
+    或存在 extraTime 比分。"""
+    sc = m.get("score") or {}
+    dur = (sc.get("duration") or "").upper()
+    return dur in ("EXTRA_TIME", "PENALTY_SHOOTOUT") or bool(sc.get("extraTime"))
+
+
 class FatigueEngine:
     """基于真实赛程计算每场德甲比赛的疲劳特征。"""
 
     def __init__(self, bl1_matches: list[dict], cl_matches: list[dict]):
-        # history[team_code] = [(date, competition, was_away, match_id), ...] 按时间升序
+        # history[team_code] = [(date, competition, was_away, match_id, extra_time), ...] 按时间升序
         self.history: dict[str, list] = {}
         for m in bl1_matches + cl_matches:
             d = _parse_date(m.get("kickoff", ""))
             if d is None or m.get("status") not in ("FINISHED", "FT"):
                 continue
             mid = m.get("match_id")
+            et = _is_extra_time(m)
             for side, key in (("home", "home_code"), ("away", "away_code")):
                 code = m.get(key)
                 if not code:
                     continue
                 self.history.setdefault(code, []).append(
-                    (d, m.get("competition", "BL1"), side == "away", mid))
+                    (d, m.get("competition", "BL1"), side == "away", mid, et))
         for lst in self.history.values():
             lst.sort(key=lambda x: x[0])
 
     def _prev(self, code: str, match_date: datetime, exclude_id=None):
-        """最近一场(≠当前场次)信息：{date, competition, was_away} 或 {}。"""
+        """最近一场(≠当前场次)信息：{date, competition, was_away, extra_time} 或 {}。"""
         prev = None
-        for (d, comp, away, mid) in self.history.get(code, []):
+        for (d, comp, away, mid, et) in self.history.get(code, []):
             if d >= match_date:
                 break
             if mid == exclude_id:
                 continue
-            prev = (d, comp, away)
+            prev = (d, comp, away, et)
         if not prev:
             return {}
-        return {"date": prev[0], "competition": prev[1], "was_away": prev[2]}
+        return {"date": prev[0], "competition": prev[1], "was_away": prev[2],
+                "extra_time": prev[3]}
 
     def rest_days(self, code: str, match_date: datetime, exclude_id=None) -> int | None:
         """距该队最近一场(≠当前场次)的休息天数。"""
@@ -95,25 +105,33 @@ class FatigueEngine:
                         fatigue += (cfg["min_rest_days"] - rd) * cfg["xG_discount_per_day"]
                         if side == "away":
                             fatigue += cfg["cl_away_intensity_bonus"]
+                    prev_extra = bool(prev.get("extra_time"))
+                    # 加时赛极端疲劳：上一场打满120分钟且休息≤恢复窗口 → 额外折扣（超过常规封顶）
+                    if prev_extra and rd is not None and rd <= cfg["extra_time_recovery_days"]:
+                        fatigue += cfg["extra_time_discount"]
                     rec[side] = {
                         "rest_days": rd,
                         "prev_competition": prev.get("competition"),
                         "prev_was_away": bool(prev.get("was_away")),
-                        "fatigue_discount": round(min(fatigue, cfg["xG_discount_max"]), 4),
+                        "prev_extra_time": prev_extra,
+                        "_fatigue": fatigue,   # 中间值（欧冠前置循环再加轮换折扣后统一封顶）
                     }
                 # 欧冠前置：本场后 7 天内该队有欧冠 → 可能轮换，折入轮换折扣(实测标定)
                 for d, hc, ac in cl_dates:
                     if 0 < (d - kick).days <= cfg["midweek_window_days"]:
                         if hc == home_c:
                             rec["home"]["cl_preceding"] = True
-                            rec["home"]["fatigue_discount"] = round(
-                                min(rec["home"]["fatigue_discount"] + cfg["cl_rotation_discount"],
-                                    cfg["xG_discount_max"]), 4)
+                            rec["home"]["_fatigue"] += cfg["cl_rotation_discount"]
                         if ac == away_c:
                             rec["away"]["cl_preceding"] = True
-                            rec["away"]["fatigue_discount"] = round(
-                                min(rec["away"]["fatigue_discount"] + cfg["cl_rotation_discount"],
-                                    cfg["xG_discount_max"]), 4)
+                            rec["away"]["_fatigue"] += cfg["cl_rotation_discount"]
+                # 统一封顶：常规 xG_discount_max；若上一场为加时赛 → 上限放宽一个 extra_time_discount（极端惩罚不被常规封顶吃掉）
+                for side in ("home", "away"):
+                    f = rec[side]
+                    cap = cfg["xG_discount_max"] + (cfg["extra_time_discount"]
+                                                    if f.get("prev_extra_time") else 0.0)
+                    f["fatigue_discount"] = round(min(f.get("_fatigue", 0.0), cap), 4)
+                    f.pop("_fatigue", None)
             out[mid] = rec
         return out
 

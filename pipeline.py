@@ -178,10 +178,10 @@ class PredictionPipeline:
         confirm_probs = None
         if stage == "确认版" and not no_injury_data and competition == "BL1":
             is_shift = self._injury_shift
-            inj_shift["home"] = is_shift(len(inj.get("home_key_out", [])),
-                                         len(inj.get("home_doubtful", [])))
-            inj_shift["away"] = is_shift(len(inj.get("away_key_out", [])),
-                                         len(inj.get("away_doubtful", [])))
+            inj_shift["home"] = is_shift(inj.get("home_key_out", []),
+                                         inj.get("home_doubtful", []))
+            inj_shift["away"] = is_shift(inj.get("away_key_out", []),
+                                         inj.get("away_doubtful", []))
             if inj_shift["home"] or inj_shift["away"]:
                 res_c = self._probs_for(home_code, away_code, home_disc=disc_h, away_disc=disc_a,
                                         inj_shift_h=inj_shift["home"], inj_shift_a=inj_shift["away"])
@@ -224,6 +224,8 @@ class PredictionPipeline:
             "away_fatigue_discount": round(fatigue_disc_a, 4),
             "cl_preceding_home": cl_preceding_h,
             "cl_preceding_away": cl_preceding_a,
+            "home_prev_extra_time": bool(f_home.get("prev_extra_time")),
+            "away_prev_extra_time": bool(f_away.get("prev_extra_time")),
         }
         card = {
             "match_id": match_id, "competition": competition,
@@ -266,10 +268,20 @@ class PredictionPipeline:
         return card
 
     # ---------------- 整轮预测（含无数据降级容错，验收条件 #4） ----------------
-    def _injury_shift(self, n_key_out: int, n_doubtful: int) -> float:
-        """按 config.injury_shift 计算单队伤病偏移（有上限）。未标定 → 用保守默认值。"""
+    def _injury_shift(self, entries_key_out: list, entries_doubtful: list) -> float:
+        """按 config.injury_shift 计算单队伤病偏移（有上限）。
+        每个球员条目可为 str（默认"核心"重要性）或 dict{"name","importance":"核心/轮换/替补"}；
+        重要性权重只缩放该球员的边际偏移，反映"核心缺阵 > 替补缺阵"。"""
         cfg = RULES["injury_shift"]
-        raw = cfg["key_out_shift"] * n_key_out + cfg["doubtful_shift"] * n_doubtful
+        imp = cfg["importance_factor"]
+        dflt = cfg.get("importance_default", "核心")
+        raw = 0.0
+        for x in (entries_key_out or []):
+            name, im = (x["name"], x.get("importance", dflt)) if isinstance(x, dict) else (str(x), dflt)
+            raw += cfg["key_out_shift"] * imp.get(im, 1.0)
+        for x in (entries_doubtful or []):
+            name, im = (x["name"], x.get("importance", dflt)) if isinstance(x, dict) else (str(x), dflt)
+            raw += cfg["doubtful_shift"] * imp.get(im, 1.0)
         return round(min(raw, cfg["max_total_shift"]), 4)
 
     def predict_round(self, round_no: int, stage: str = "初版",

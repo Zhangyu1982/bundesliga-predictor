@@ -112,13 +112,41 @@ def test_espn_injuries_structured():
 
 def test_merge_injuries_from_candidates():
     merged = _merge_injuries(
-        {"MAI": {"key_out": ["布卡特"], "doubtful": []}},
-        [{"player": "Kane", "team_code": "BAY", "status": "key_out"},
-         {"player": "Gnabry", "team_code": "BAY", "status": "doubtful"}])
-    assert merged["BAY"]["key_out"] == ["Kane"]
-    assert merged["BAY"]["doubtful"] == ["Gnabry"]
-    assert merged["MAI"]["key_out"] == ["布卡特"]   # 原有保留
+        {"MAI": {"key_out": [{"name": "布卡特", "importance": "核心"}], "doubtful": []}},
+        [{"player": "Kane", "team_code": "BAY", "status": "key_out", "importance": "轮换"},
+         {"player": "Gnabry", "team_code": "BAY", "status": "doubtful", "importance": "替补"}])
+    assert merged["BAY"]["key_out"] == [{"name": "Kane", "importance": "轮换"}]
+    assert merged["BAY"]["doubtful"] == [{"name": "Gnabry", "importance": "替补"}]
+    assert merged["MAI"]["key_out"] == [{"name": "布卡特", "importance": "核心"}]   # 原有保留
     assert _merge_injuries(None, []) is None
+
+
+# ---------- P2 #8：球员重要性 → injury_shift 加权重算 ----------
+def test_injury_shift_by_importance():
+    from pipeline import PredictionPipeline
+    p = PredictionPipeline()
+    # 3 名缺阵：核心+轮换+替补 → 0.10 + 0.10*0.6 + 0.10*0.3 = 0.19
+    match = {
+        "match_id": "565851", "home_team": "美因茨", "away_team": "拜仁慕尼黑",
+        "home_code": "MAI", "away_code": "BAY",
+        "kickoff": "2026-11-07T22:30:00+08:00", "last_updated": "2026-11-01T15:00:00+08:00",
+        "standings": {}, "form_last3": {}, "confidence": "中",
+        "injuries": {
+            "home_key_out": [{"name": "布卡特", "importance": "核心"}],
+            "away_key_out": [{"name": "Kane", "importance": "核心"},
+                              {"name": "Musiala", "importance": "轮换"},
+                              {"name": "Gnabry", "importance": "替补"}],
+            "home_doubtful": [], "away_doubtful": []},
+    }
+    card = p.predict_match(match, 9, stage="确认版", realtime_injury_available=True)
+    assert card["injury_shift"]["home"] == 0.10
+    assert card["injury_shift"]["away"] == round(0.10 + 0.06 + 0.03, 4)   # 0.19
+    # 全核心（无重要性标注，默认核心）→ 与旧口径一致（0.30 封顶前）
+    match2 = dict(match, injuries={
+        "home_key_out": ["A", "B", "C"], "away_key_out": [],
+        "home_doubtful": [], "away_doubtful": []})
+    card2 = p.predict_match(match2, 9, stage="确认版", realtime_injury_available=True)
+    assert card2["injury_shift"]["home"] == 0.30   # 3*0.1=0.30
 
 
 # ---------- P2 #6：跨赛事分析 ----------
@@ -170,3 +198,30 @@ def test_fatigue_cl_preceding_applies_rotation_discount():
     amap = fe.analyze(bl1, cl_fut)
     assert amap["b1"]["home"]["cl_preceding"] is True
     assert amap["b1"]["home"]["fatigue_discount"] >= FATIGUE_RULES["cl_rotation_discount"]
+
+
+# ---------- P2 #9：加时赛+120分钟极端疲劳惩罚 ----------
+def test_fatigue_extra_time_extreme_penalty():
+    # 拜仁 11-01 打满120分钟(欧冠加时 FINISHED, duration=EXTRA_TIME)，11-05 德甲(休息4天≤3? no→但加时窗口3天外)
+    # 休息4天超出 extra_time_recovery_days(3) → 无额外惩罚；换 11-03(休息2天) → 触发额外惩罚
+    cl = [{"match_id": "c1", "competition": "CL", "home_code": "BAY", "away_code": "X",
+           "kickoff": "2026-11-01T20:00:00Z", "status": "FINISHED",
+           "score": {"duration": "EXTRA_TIME"}, "home_team": "拜仁", "away_team": "x"}]
+    bl1 = [{"match_id": "b1", "competition": "BL1", "home_code": "BAY", "away_code": "Y",
+            "kickoff": "2026-11-03T14:30:00Z", "status": "TIMED", "home_team": "拜仁", "away_team": "y"}]
+    fe = FatigueEngine(bl1, cl)
+    amap = fe.analyze(bl1, [])
+    h = amap["b1"]["home"]
+    assert h["prev_extra_time"] is True
+    # 极端惩罚：额外折扣≥extra_time_discount（且超过常规 xG_discount_max 封顶部分由加时赛解锁）
+    assert h["fatigue_discount"] >= FATIGUE_RULES["extra_time_discount"]
+    assert h["fatigue_discount"] > FATIGUE_RULES["xG_discount_max"]
+    # 休息3天+加时 → 恢复窗口边界(3天内含) → 仍触发
+    cl2 = [dict(cl[0], kickoff="2026-11-02T20:00:00Z")]
+    bl12 = [dict(bl1[0], kickoff="2026-11-05T14:30:00Z")]   # 休息3天
+    fe2 = FatigueEngine(bl12, cl2)
+    assert fe2.analyze(bl12, [])["b1"]["home"]["fatigue_discount"] >= FATIGUE_RULES["extra_time_discount"]
+    # 无加时(常规赛) → 不触发额外惩罚
+    cl3 = [dict(cl[0], score={"duration": "REGULAR"})]
+    fe3 = FatigueEngine(bl1, cl3)
+    assert fe3.analyze(bl1, [])["b1"]["home"]["prev_extra_time"] is False
