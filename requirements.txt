@@ -8,3 +8,5 @@ lightgbm>=4.0
 # catboost 仅在德甲数据量 >2000 场时启用（见 config.CATBOOST_MIN_SAMPLES）
 # catboost>=1.2
 # optuna>=3.5      # P1：超参搜索（移植 tip-ai）
+
+# deployment-force-rebuild-20261102 (live_results.json 2场真实赛果)
