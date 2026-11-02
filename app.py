@@ -567,15 +567,20 @@ with st.sidebar:
     st.divider()
     lr, merged = _live_results_records()
     if lr:
-        hits = sum(1 for r in lr if r.get("pred_hit") == 1)
+        picked = [r for r in lr if r.get("pred_pick")]
+        hits = sum(1 for r in picked if r.get("pred_hit") == 1)
         st.markdown("**🏁 真实赛果记录**（live_results.json 入库）")
-        st.caption(f"{len(lr)} 场实战 · 方向命中 {hits}/{len(lr)}"
+        st.caption(f"{len(lr)} 场实战 · 已预测 {len(picked)} 场 · 命中 {hits}/{max(len(picked),1)}"
                    f"（与 bias.db 历史合并共 {len(merged)} 条）")
         for r in lr[-3:]:
-            mark = "✅" if r.get("pred_hit") == 1 else "❌"
+            pick = r.get("pred_pick")
+            if pick:
+                mark = "✅" if r.get("pred_hit") == 1 else "❌"
+                tail = f"· 预测{pick} {mark}"
+            else:
+                tail = "· 未提供赛前预测"
             st.caption(f"{r.get('season')} R{r.get('round_no')} {r.get('home')} "
-                       f"{r.get('actual_hg')}-{r.get('actual_ag')} {r.get('away')} · "
-                       f"预测{r.get('pred_pick')} {mark}")
+                       f"{r.get('actual_hg')}-{r.get('actual_ag')} {r.get('away')}{tail}")
     else:
         st.caption("🏁 暂无真实赛果记录（新赛果经 scripts/record_live_result.py 记录并推送）")
     st.caption("ROI：数据源无历史赔率，无法真实计算（未虚构）")

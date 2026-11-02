@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-02T00:40:58",
+  "updated_at": "2026-11-02T10:46:59",
   "records": [
     {
       "season": "2627",
@@ -19,6 +19,25 @@
       "dc_dir": "away_win",
       "divergence": 1,
       "bias_streak": 0
+    },
+    {
+      "season": "2627",
+      "round_no": 8,
+      "match_id": "BUN_2627_R08_Frankfurt_Hamburg_LIVE",
+      "home": "Frankfurt",
+      "away": "Hamburg",
+      "actual_hg": 3,
+      "actual_ag": 1,
+      "actual_ftr": "H",
+      "pred_home": null,
+      "pred_draw": null,
+      "pred_away": null,
+      "pred_pick": null,
+      "elo_dir": null,
+      "dc_dir": null,
+      "divergence": 0,
+      "bias_streak": 0,
+      "pred_hit": null
     }
   ]
 }

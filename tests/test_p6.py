@@ -125,3 +125,20 @@ def test_merge_dedup_live_first():
 
 def test_load_missing_returns_empty():
     assert load_live_results(_tmp_json()) == []
+
+
+def test_no_predict_hit_is_null():
+    """诚实：未提供赛前预测时不误判为'未命中'，pred_hit 应为 NULL。"""
+    db, jp = _tmp_db(), _tmp_json()
+    try:
+        rec = _rec()
+        rec["pred_pick"] = None
+        rec["pred_home"] = None
+        record(rec, db, jp)
+        from data_stores.bias_store import BiasStore
+        r = BiasStore(db).query(season="2627")[0]
+        assert r["pred_pick"] is None
+        assert r["pred_hit"] is None
+        assert load_live_results(jp)[0]["pred_hit"] is None
+    finally:
+        os.remove(db); os.path.exists(jp) and os.remove(jp)

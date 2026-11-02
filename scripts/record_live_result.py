@@ -43,7 +43,9 @@ def record(rec: dict, db_path: str = DB_PATH, live_path: str | None = None) -> i
     rec.setdefault("elo_dir", None)
     rec.setdefault("dc_dir", None)
     rec.setdefault("divergence", 0)
-    rec.setdefault("pred_hit", _auto_pred_hit(rec.get("pred_pick"), rec.get("actual_ftr")))
+    _pick = rec.get("pred_pick")
+    # 诚实：无赛前预测时 pred_hit 为 NULL（未预测），不误判为"未命中"
+    rec.setdefault("pred_hit", None if not _pick else _auto_pred_hit(_pick, rec.get("actual_ftr")))
     n = BiasStore(db_path).write_records([rec])
     # 同步写入库 JSON：按 match_id 去重替换，保留既有真实赛果
     existing = [r for r in load_live_results(live_path) if r.get("match_id") != rec.get("match_id")]
