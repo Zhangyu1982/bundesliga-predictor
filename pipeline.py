@@ -183,15 +183,25 @@ class PredictionPipeline:
         lineup_info = {"available": False, "note": "未获取到本场官方首发（赛前约 60 分钟才公布）"}
         _base_lambda = float(getattr(self._bundle, "dc_mu_home", 1.5) or 1.5)
         if lineup and lineup.get("available") and competition == "BL1":
-            from data.baseline import load_baseline
-            from lineup_shift import starter_deviation, describe_shift, xg_equivalent
+            from data.baseline import load_baseline, fetch_team_roster, fetch_team_ids, roster_drift
+            from lineup_shift import (starter_deviation, describe_shift, xg_equivalent,
+                                      describe_newcomers)
             bl_teams = (load_baseline() or {}).get("teams", {}) or {}
+            team_ids = fetch_team_ids("BL1")
             details = {"home": "", "away": ""}
+            newcomers = {"home": None, "away": None}
+            drift = {"home": None, "away": None}
             for side, code, team_name in (("home", home_code, home), ("away", away_code, away)):
-                dev = starter_deviation(bl_teams.get(code), lineup.get(side))
+                entry = bl_teams.get(code)
+                # 转会窗容错：拿当前大名单，把已离队的基线主力剔出扣分对象
+                roster = fetch_team_roster(team_ids.get(code), "BL1") if team_ids.get(code) else {}
+                dev = starter_deviation(entry, lineup.get(side), roster=roster)
                 lineup_dev[side] = dev
                 lineup_shift[side] = float(dev.get("shift", 0.0) or 0.0)
                 details[side] = describe_shift(team_name, dev, _base_lambda)
+                newcomers[side] = describe_newcomers(team_name, dev)
+                d = roster_drift(entry or {}, roster)
+                drift[side] = d if d.get("available") else None
             lineup_info = {
                 "available": True,
                 "source": lineup.get("source", "ESPN 首发名单"),
@@ -199,9 +209,12 @@ class PredictionPipeline:
                 "ready_at": lineup.get("ready_at"),
                 "home": lineup_dev["home"], "away": lineup_dev["away"],
                 "detail_lines": details,
+                "newcomer_lines": newcomers,
+                "roster_drift": drift,
                 "xg_home": xg_equivalent(lineup_shift["home"], _base_lambda),
                 "xg_away": xg_equivalent(lineup_shift["away"], _base_lambda),
-                "note": "首发反推：常规主力在首发=满分，在替补席=半额，不在名单=全额",
+                "note": "首发反推：常规主力在首发=满分，在替补席=半额，不在名单=全额；"
+                        "计算前已用当前大名单校验，已离队球员不计扣分",
             }
 
         # ---------- 疲劳特征（欧战/杯赛干扰，进 GBM 特征库语义） ----------

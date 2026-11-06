@@ -13,19 +13,33 @@ P5 · 常规主力库（Baseline XI）
   - 首发率 rate = 首发次数 / 参与统计的场次数，取值 0–1
   - baseline XI = 门将位取首发最多的 1 人 + 其余按 rate 取 10 人
   - 常规主力集合 core = rate >= cfg.core_rate（默认 0.6）
+
+P5.1 · 转会窗容错
+----------------
+基线是**静态快照**。夏窗/冬窗卖掉的人会一直留在库里，被当成"主力缺失"重扣；
+新援则完全不在库里。因此：
+  1. 构建时同时抓 `/teams/{id}/roster` 的**当前大名单**，把已不在队的球员从 XI/core 剔除；
+  2. 每队存 `roster_ids` 快照与 `seen`（窗口内所有首发过的球员），供运行时二次校验；
+  3. `roster_drift()` 比对快照与最新大名单，离队比例超阈值 → 判定"阵容洗牌，建议重建"。
+大名单接口实测：`/ger.1/teams/{id}/roster` → 200，扁平球员数组（id/fullName/position/jersey/age），
+athlete id 与 summary 里的 `athlete.id` 同一套（BAY/HSV/DOR 各 11/11 全匹配）。
+（`transactions`/`seasons` 只是 `.pvt` 内部 $ref 链接，取不到转会明细，故新援识别只能用首发历史代理。）
 """
 from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 
 from data.euro_fetch import espn_team_to_code
 from data.lineup import (_get_json, ESPN_SOCCER_BASE, LINEUP_LEAGUES,
-                         fetch_match_lineup, scoreboard_events)
+                         fetch_match_lineup, scoreboard_events, _load, _save)
+from config import LINEUP_SHIFT as LINEUP_CFG
 
 DATA_DIR = os.path.dirname(os.path.abspath(__file__))
 BASELINE_FILE = os.path.join(DATA_DIR, "baseline_xi.json")
+ROSTER_CACHE = os.path.join(DATA_DIR, "roster_cache.json")
 
 # 项目 code -> BL1 18 队（用于确认 baseline 覆盖到哪些队）
 BL1_CODES = ["BAY", "BMG", "DOR", "ELV", "FCA", "FCU", "HSV", "KOE", "LEV",
@@ -92,6 +106,141 @@ def fetch_team_events(team_id: str, league_key: str = "BL1") -> list[dict]:
         state = ((comp.get("status") or {}).get("type") or {}).get("state") or ""
         out.append({"event_id": str(e.get("id")), "date": e.get("date") or "",
                     "name": e.get("name") or "", "state": state})
+    return out
+
+
+def fetch_team_roster(team_id: str, league_key: str = "BL1", use_cache: bool = True,
+                      ttl_hours: int = 24) -> dict:
+    """抓该队**当前大名单**（转会窗容错的基础）。
+
+    返回 {ids: [athlete_id...], players: {id: {name,pos,jersey,age}}, n, fetched_at, source}
+    接口不可用时返回 {"ids": [], "players": {}, "n": 0, "error": "..."} —— 调用方必须把空名单
+    当作"校验不可用"而**不是**"全队已离队"，绝不能据此清空基线。
+    """
+    lg = LINEUP_LEAGUES.get(league_key)
+    empty = {"ids": [], "players": {}, "n": 0, "source": "ESPN roster"}
+    if not lg or not team_id:
+        return {**empty, "error": "缺少 team_id 或 league"}
+
+    cache = _load(ROSTER_CACHE)
+    ck = f"{lg}:{team_id}"
+    hit = cache.get(ck) or {}
+    if use_cache and hit.get("ids"):
+        try:
+            from datetime import datetime as _dt
+            age_h = (_dt.now() - _dt.strptime(hit["fetched_at"], "%Y-%m-%d %H:%M")).total_seconds() / 3600
+            if age_h <= ttl_hours:
+                return hit
+        except Exception:
+            pass
+
+    # 该端点单次约 200KB 且偶发慢（实测出现过 ReadTimeout），重试 3 次再放弃
+    j = None
+    for _i in range(3):
+        j = _get_json(f"{ESPN_SOCCER_BASE}/{lg}/teams/{team_id}/roster", timeout=30)
+        if j:
+            break
+        time.sleep(2)
+    if not j:
+        return {**empty, "error": "ESPN roster 请求失败（已重试 3 次）"}
+
+    ids, players = [], {}
+    for p in j.get("athletes") or []:
+        pid = str(p.get("id") or "")
+        name = p.get("fullName") or p.get("displayName") or ""
+        if not pid:
+            continue
+        pos = p.get("position")
+        pos_abbr = (pos or {}).get("abbreviation", "") if isinstance(pos, dict) else str(pos or "")
+        ids.append(pid)
+        players[pid] = {"name": name, "pos": pos_abbr,
+                        "jersey": p.get("jersey") or "", "age": p.get("age")}
+    if not ids:
+        return {**empty, "error": "ESPN roster 为空"}
+
+    out = {"ids": ids, "players": players, "n": len(ids),
+           "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+           "source": "ESPN roster"}
+    cache[ck] = out
+    _save(ROSTER_CACHE, cache)
+    return out
+
+
+def _id_key(p: dict) -> str:
+    """球员的身份键：优先 athlete id（转会/重名都更稳），其次姓名。"""
+    return str(p.get("id") or "").strip() or ("name::" + (p.get("name") or ""))
+
+
+def prune_by_roster(xi: list[dict], core: list[dict], roster: dict | None,
+                    cfg: dict | None = None) -> tuple[list[dict], list[dict], list[dict], str]:
+    """把"已经不在本队大名单"的基线球员剔除（不参与缺阵扣分）。
+
+    返回 (xi_ok, core_ok, departed, status)
+      status: "ok"（校验过）/ "roster_unavailable"（名单没拿到，保持原样）/ "disabled"
+    roster 为空时**原样返回**——抓不到名单不等于全队走光，这是本函数最重要的安全约定。
+    """
+    c = cfg or {}
+    if c.get("roster_check") is False:
+        return xi, core, [], "disabled"
+    ids = set((roster or {}).get("ids") or [])
+    if not ids:
+        return xi, core, [], "roster_unavailable"
+
+    kept, departed = [], []
+    for p in xi:
+        if _id_key(p) in ids:
+            kept.append(p)
+        else:
+            departed.append({"name": p.get("name", ""), "id": p.get("id", ""),
+                             "pos": p.get("pos", ""), "rate": p.get("rate"),
+                             "why": "已离队（不在当前大名单）"})
+    kept_keys = {_id_key(p) for p in kept}
+    core_ok = [p for p in core if _id_key(p) in kept_keys or _id_key(p) in ids]
+    return kept, core_ok, departed, "ok"
+
+
+def roster_drift(team_entry: dict, roster: dict | None) -> dict:
+    """基线快照 vs 当前大名单：判断阵容是否洗牌（需重建基线）。
+
+    以基线 XI 为分母算"离队比例"，因为只有这 11 人才会影响扣分。
+    """
+    ids = set((roster or {}).get("ids") or [])
+    xi = (team_entry or {}).get("xi") or []
+    if not xi or not ids:
+        return {"available": False, "departed": [], "departed_ratio": 0.0,
+                "drift": False, "note": "大名单或基线缺失，无法比对"}
+    gone = [p for p in xi if _id_key(p) not in ids]
+    ratio = round(len(gone) / len(xi), 3)
+    return {"available": True,
+            "departed": [p.get("name", "") for p in gone],
+            "departed_ratio": ratio,
+            "drift": ratio >= float((LINEUP_CFG or {}).get("drift_warn_ratio", 0.25)),
+            "note": (f"基线 XI 中 {len(gone)} 人已不在当前大名单（{ratio:.0%}）"
+                     if gone else "基线 XI 全部仍在当前大名单")}
+
+
+def check_baseline_health(league_key: str = "BL1", use_cache: bool = True) -> dict:
+    """体检基线库：逐队比对当前大名单 + 检查快照时效，供 UI 提示是否可以信任。"""
+    bl = load_baseline()
+    teams = bl.get("teams") or {}
+    team_ids = fetch_team_ids(league_key, use_cache=use_cache)
+    stale, ok_n, unavailable = [], 0, 0
+    for code, entry in teams.items():
+        if not entry.get("available"):
+            continue
+        tid = team_ids.get(code)
+        ros = fetch_team_roster(tid, league_key) if tid else {}
+        drift = roster_drift(entry, ros)
+        if not drift.get("available"):
+            unavailable += 1
+            continue
+        if drift.get("drift"):
+            stale.append({"code": code, **drift})
+        else:
+            ok_n += 1
+    out = {"updated_at": bl.get("updated_at", ""), "n_teams": len(teams),
+           "ok": ok_n, "stale": stale, "roster_unavailable": unavailable,
+           "need_rebuild": bool(stale)}
     return out
 
 
@@ -169,7 +318,16 @@ def build_baseline(window_matches: int = 8, league_key: str = "BL1",
         if lu.get("available"):
             lineups[eid] = lu
 
-    # 2) 汇总
+    # 2) 每队当前大名单（转会窗容错：把已离队的人从 XI/core 里剔掉）
+    rosters = {}
+    for code in team_events:
+        tid = team_ids.get(code)
+        ros = fetch_team_roster(tid, league_key) if tid else {}
+        rosters[code] = ros
+        if verbose:
+            print(f"[baseline] {code} roster: {ros.get('n', 0)} 人 {ros.get('error', '')}")
+
+    # 3) 汇总
     teams_out = {}
     for code, evs in team_events.items():
         rows = []
@@ -183,31 +341,53 @@ def build_baseline(window_matches: int = 8, league_key: str = "BL1",
             if len(rows) >= window_matches:
                 break
         if not rows:
-            teams_out[code] = {"n_matches": 0, "xi": [], "core": [],
+            teams_out[code] = {"n_matches": 0, "xi": [], "core": [], "seen": [],
                                "available": False, "note": "ESPN 未提供该队近期首发"}
             continue
         agg = _aggregate(code, rows)
         xi, all_rows = _pick_xi(agg["players"])
         core = [r for r in all_rows if r["rate"] >= core_rate and r["starts"] > 0]
+        xi_dicts = [{"name": r["name"], "id": r.get("id", ""), "pos": r.get("pos", ""),
+                     "rate": r["rate"], "starts": r["starts"]} for r in xi]
+        core_dicts = [{"name": r["name"], "id": r.get("id", ""), "rate": r["rate"],
+                       "starts": r["starts"], "pos": r.get("pos", "")} for r in core]
+        # 窗口内所有首发过的球员（供运行时判断"本场首发是否为生面孔/新援"）
+        seen_dicts = [{"name": r["name"], "id": r.get("id", ""), "pos": r.get("pos", ""),
+                       "rate": r["rate"], "starts": r["starts"]} for r in all_rows]
+
+        ros = rosters.get(code) or {}
+        xi_dicts, core_dicts, departed, rstatus = prune_by_roster(
+            xi_dicts, core_dicts, ros, LINEUP_CFG)
+        note = f"近 {agg['n_matches']} 场首发统计"
+        if departed:
+            note += f"；已剔除 {len(departed)} 名离队球员"
+        if rstatus == "roster_unavailable":
+            note += "；⚠️ 大名单未取到，未做离队校验"
+
         side_first = _side_of(rows[0], code)
         teams_out[code] = {
-            "available": True,
+            "available": bool(xi_dicts) and len(xi_dicts) >= int(LINEUP_CFG.get("bench_depth_warn", 3)),
             "n_matches": agg["n_matches"],
             "formation_hint": (rows[0].get(side_first) or {}).get("formation", ""),
-            "xi": [{"name": r["name"], "id": r.get("id", ""), "pos": r.get("pos", ""),
-                    "rate": r["rate"], "starts": r["starts"]} for r in xi],
-            "core": [{"name": r["name"], "rate": r["rate"], "starts": r["starts"],
-                      "pos": r.get("pos", "")} for r in core],
-            "note": f"近 {agg['n_matches']} 场首发统计",
+            "xi": xi_dicts,
+            "core": core_dicts,
+            "seen": seen_dicts,
+            "roster": {"ids": ros.get("ids") or [], "n": ros.get("n", 0),
+                       "fetched_at": ros.get("fetched_at", ""),
+                       "checked": rstatus},
+            "departed": departed,
+            "note": note,
         }
         if verbose:
-            print(f"[baseline] {code}: matches={agg['n_matches']} xi={len(xi)} core={len(core)}")
+            print(f"[baseline] {code}: matches={agg['n_matches']} xi={len(xi_dicts)} "
+                  f"core={len(core_dicts)} seen={len(seen_dicts)} departed={len(departed)}")
 
     data = {
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "league": LINEUP_LEAGUES.get(league_key, ""),
         "window_matches": window_matches,
         "core_rate": core_rate,
+        "roster_checked": True,
         "teams": teams_out,
     }
     save_baseline(data)

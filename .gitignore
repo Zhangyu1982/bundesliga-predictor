@@ -26,3 +26,6 @@ data/injuries_backup.json
 # 否则公网 Streamlit Cloud 上拿不到常规主力库，首发反推会静默失效。
 data/lineup_p5_cache.json
 data/scoreboard_p5_cache.json
+
+# P5.1 大名单缓存（运行时拉取，TTL 24h；丢失后会自动重拉，不影响结果正确性）
+data/roster_cache.json

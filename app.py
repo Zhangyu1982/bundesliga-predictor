@@ -553,6 +553,8 @@ with st.expander("⚡ 赛前 1 小时终极刷新（用官方首发反推常规�
         "- 常规主力在首发 → 战力满分\n"
         "- 常规主力在替补席 → 扣一半（下半场能上，含超级替补价值）\n"
         "- 常规主力完全不在名单 → 全额扣（约 0.10 DC 折扣/人，按历史首发率加权）\n\n"
+        "**转会窗容错**：基线是静态快照，卖走的人会永远留在库里。所以扣分前先用 ESPN 当前大名单校验——"
+        "已离队的直接剔出、不扣分；本场首发但基线里从未出现过的人标为「新面孔首发」（新援/奇兵），只提示不加分。\n\n"
         "把上面阶段切到 **⚡ 终极版** 后点「生成预测」即触发；抓不到首发会自动回退，不会编造。")
     _bl = None
     try:
@@ -560,8 +562,22 @@ with st.expander("⚡ 赛前 1 小时终极刷新（用官方首发反推常规�
         _bl = load_baseline()
         if _bl.get("teams"):
             _ok = sum(1 for v in _bl["teams"].values() if v.get("available"))
+            _checked = sum(1 for v in _bl["teams"].values()
+                           if ((v.get("roster") or {}).get("checked") == "ok"))
             st.caption(f"常规主力库：{_ok}/{len(_bl['teams'])} 队可用 · 近 {_bl.get('window_matches')} 场统计 · "
-                       f"更新于 {_bl.get('updated_at')}（样本不足的队会回退为不扣分）")
+                       f"更新于 {_bl.get('updated_at')} · 大名单已校验 {_checked} 队"
+                       "（样本不足的队会回退为不扣分）")
+            # 快照时效提醒：超过宽限期提示重建（转会窗期间尤其重要）
+            try:
+                from datetime import datetime as _dt
+                import config as _cfg
+                _grace = float(_cfg.LINEUP_SHIFT.get("roster_ttl_grace_hours", 72))
+                _age = (_dt.now() - _dt.strptime(_bl.get("updated_at"), "%Y-%m-%d %H:%M")).total_seconds() / 3600
+                if _age > _grace:
+                    st.warning(f"⏳ 常规主力库已 {_age/24:.1f} 天未重建（超过 {_grace/24:.0f} 天宽限），"
+                               "转会窗期间阵容可能已变，建议运行 `python -m data.baseline 8` 刷新。")
+            except Exception:
+                pass
         else:
             st.caption("常规主力库尚未构建：运行 `python -m data.baseline 8`（约 1–2 分钟）生成后即可使用。")
     except Exception:
@@ -728,6 +744,24 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
                     st.error(_txt)
                 else:
                     st.success(_txt)
+
+                # ---- P5.1 转会窗容错：新援/奇兵提示 + 已离队剔除说明 ----
+                _nc = [x for x in (lu.get("newcomer_lines") or {}).values() if x]
+                if _nc:
+                    st.info("🆕 **新面孔首发**：" + " ｜ ".join(_nc))
+                _dep = []
+                for _side, _name in (("home", c.get("home_team")), ("away", c.get("away_team"))):
+                    _dev = (lu.get(_side) or {})
+                    for _p in (_dev.get("departed") or []):
+                        _dep.append(f"{_name}·{_p.get('name')}")
+                if _dep:
+                    st.caption("↩️ 已不计扣分（不在当前大名单）：" + "、".join(_dep[:8])
+                               + (f" 等 {len(_dep)} 人" if len(_dep) > 8 else ""))
+                # 阵容洗牌 → 基线过期提醒
+                _dr = [d for d in (lu.get("roster_drift") or {}).values() if d and d.get("drift")]
+                if _dr:
+                    st.warning("♻️ **该队阵容变动较大**（基线 XI 已离队比例过高），"
+                               "建议重建常规主力库：`python -m data.baseline 8`，否则新援不会被识别为常规主力。")
             st.markdown(f"**胜/平/负**　主胜 `{p['home_win']}` · 平 `{p['draw']}` · 客胜 `{p['away_win']}`")
             if ss["competition"] == "CL":
                 st.caption("欧冠跨赛事预测：德甲队用模型 Elo，其他联赛对手用精选豪门/联赛平均 Elo 兜底（未实时校准）。")

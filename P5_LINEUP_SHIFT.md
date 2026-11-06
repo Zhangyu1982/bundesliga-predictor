@@ -130,12 +130,89 @@
    方向正确但不是精确模型 —— 已在 `LINEUP_SHIFT.calibration_note` 里如实写明，
    且 `calibrated=False`（UI 显示黄牌「未标定，仅供参考」）。
 
+## 四点五、转会窗容错（P5.1）
+
+### 盲区是什么
+
+基线是**静态快照**（近 8 场首发率）。夏窗/冬窗卖掉的核心（例如凯恩式转会）会永久留在 `xi` 里，
+每场都被判「不在大名单 → 全额扣分」；新援则完全不在库里，只落进 `unknown_starters`，UI 上完全静默。
+
+### 数据可行性（本轮实测）
+
+| 结论 | 证据 |
+|---|---|
+| `/ger.1/teams/{id}/roster` → **200**，扁平 `athletes` 数组 | 每队 27–35 人，带 `id/fullName/position/jersey/age/status` |
+| athlete id 与 `summary` 的 `athlete.id` **同一套** | BAY/HSV/DOR 三队 baseline XI 各 11/11 全匹配（0 人不在 roster） |
+| `transactions` / `seasons` / `leagues` 取不到转会明细 | 只是 `http://sports.core.api.espn.pvt/...` 的 `$ref`，逐人追要 30+ 次/队 |
+| **ESPN 无身价 / 转会费 / 出场分钟** | `injuries` 恒为空数组，`statistics` 为空 → 用户要求的"身价较高"判据**无法满足** |
+| 该端点偶发 ReadTimeout | 单次响应约 200 KB，已加 3 次重试 + `timeout=30` + 24h 磁盘缓存 |
+
+### 三条机制怎么落地
+
+**① 大名单校验（`data/baseline.py` + `lineup_shift.py`）**
+- 构建时：`fetch_team_roster()` 抓 18 队当前大名单 → `prune_by_roster()` 把已不在队的人从 `xi`/`core` 剔除，
+  每队存 `roster{ids,n,fetched_at,checked}` 与 `departed[]`。
+- 运行时：`starter_deviation(..., roster=...)` 再校验一次（缓存 24h），已离队者进 `departed[]`、**不扣分**。
+- **安全约定**：`roster` 为空（抓失败/未登录）时**原样保留全部基线球员** —— 空名单 ≠ 全队走光。
+  此时返回 `roster_check="roster_unavailable"`，UI 明写"⚠️ 大名单未取到，未做离队校验"。
+
+**② 冬/夏窗洗牌检测**
+- 每队存 `roster.ids` 快照；`roster_drift()` 以**基线 XI 为分母**算离队比例。
+- `departed_ratio >= drift_warn_ratio(0.25)` → `drift=True`，`check_baseline_health()` 汇总成 `need_rebuild`。
+- UI 两处提示：卡片出现 `♻️ 该队阵容变动较大…建议 python -m data.baseline 8`；
+  基线 expander 里快照超过 `roster_ttl_grace_hours(72)` → `⏳ 已 N 天未重建`。
+- **目前是"检测 + 提示"，不是自动重建**：一次重建要 18 次 roster + 72 场 summary，
+  在 Streamlit Cloud 上自动触发会产生大量外部请求与超时风险，故保留人工确认。
+
+**③ 新援 / 奇兵识别**
+- 每队额外存 `seen[]`（窗口内**所有**首发过的球员，14–22 人/队，含 rate/starts/pos）。
+- 本场首发但**不在 `seen`** → `newcomers[]`，UI 出 `🆕 新面孔首发：X（F）—— 可能是新援或被提上来的替补`。
+- 只提示、**不加减分**：因为无法量化其水平（ESPN 无身价、无出场分钟）。
+- **判据代理如实声明**：用户要求里"身价较高/联赛出场次数多"这两个判据 ESPN 都没有，
+  实现只能用「基线窗口内从未首发」代理。旧版基线（无 `seen` 字段）会退化为标"疑似新面孔"（`estimated=True`），
+  不假装确定。
+
+### 新增配置（`config.LINEUP_SHIFT`）
+
+```python
+"roster_check": True,          # 扣分前先用当前大名单校验
+"roster_cache_hours": 24,      # 大名单磁盘缓存 TTL
+"roster_ttl_grace_hours": 72,  # 基线超过该时长未重建 → UI 提示
+"drift_warn_ratio": 0.25,      # 基线 XI 离队比例阈值 → 判定洗牌
+"bench_depth_warn": 3,         # 剔除后 XI 不足该人数 → 基线不可用
+"newcomer_hint": True,         # 是否提示新面孔首发
+```
+
+### 端到端实测（`_diag15.txt`）
+
+- 18/18 队 roster 全部取到（27–35 人），重建后 `departed=0`（本赛季无跨队流失，符合预期），
+  `seen` 每队 14–22 人。
+- 真实已完赛场 `401884753`（STU@LEV）：两队 `roster_check=ok`、`departed=[]`，扣分逻辑不变
+  （LEV 缺 1 人 0.0625 / STU 缺 4 人 0.2375）；`Lucas Vázquez`、`Bilal El Khannouss` 等
+  虽非基线 XI 但**在 `seen` 内**，故 `newcomers=[]` —— 老队员轮换不误报为新援。
+- 模拟"移除 Dayot Upamecano 的 id"：`shift=0.0`、`departed=['Dayot Upamecano']`、
+  文案「常规主力全部首发…已剔除 1 名离队球员」，扣分被正确豁免。
+
+### 单测（`tests/test_p5_transfer_window.py`，13 条全绿）
+
+已离队不扣分 / 空名单不清空基线 / `roster_check` 可关闭 / 离队与真缺阵可分离 /
+洗牌阈值触发与不触发 / 双侧缺一不算洗牌 / 新援识别 / 轮换老队员不误报 /
+`_id_key` id 优先姓名兜底 / 旧基线标"疑似" / 文案含"离队"。
+
+---
+
 ## 五、口径与未做项（诚实清单）
 
 - `LINEUP_SHIFT.calibrated = False`。0.10/人、替补席折半都是启发式，**未用历史「首发-赛果」回归标定**。
   要标定需要逐场首发 + 赛果的大样本回归，是独立一轮工作。
 - 基线窗口取近 8 场（`/teams/{id}/schedule` 一次只回 8 条，扩到 10 场需额外按月分片抓取，暂未做）。
 - 只对 `BL1` 生效（欧冠没有逐场例行首发统计路径，且对手多为非德甲队，基线库不覆盖）。
+- **新援判据无法按身价/出场次数做**：ESPN 不提供身价、转会费、逐人出场分钟，
+  只能用「基线 8 场窗口内从未首发」这一代理；相应地新援**只提示、不加分**。
+- **洗牌检测不会自动重建基线**（只检测 + 提示）。自动重建需要 18 次 roster + 72 场 summary 请求，
+  在 Streamlit Cloud 上按时序自动触发风险过高，保留人工执行。
+- 转会记录本身（谁转去哪、转会费）ESPN 拿不到（`transactions` 是 `.pvt` 内部 `$ref`），
+  所以「已离队」只能表达为"不在当前大名单"，不能说明是转会、解约还是退役。
 - 上一轮遗留仍未解决：GBM 外推未根治（未改 `trainer.py` h2h 默认 1.0、未重训模型）。
 
 ## 六、怎么用
