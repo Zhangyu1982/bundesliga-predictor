@@ -462,10 +462,12 @@ with col_r:
     r = st.selectbox("选择轮次", range(1, 35), index=ss["round"] - 1)
     ss["round"] = r
 with col_s:
-    stage_sel = st.radio("阶段", ["初版", "确认版"], horizontal=True,
-                         index=0 if ss.get("stage", "初版") == "初版" else 1,
-                         key="stage_radio")
-    ss["stage"] = stage_sel
+    stage_sel = st.radio("阶段", ["初版", "确认版", "⚡ 终极版（首发反推）"], horizontal=True,
+                         index={"初版": 0, "确认版": 1, "终极版": 2}.get(ss.get("stage", "初版"), 0),
+                         key="stage_radio",
+                         help="终极版：用赛前约 1 小时公布的官方首发，反推常规主力缺失（替补席折半），"
+                              "自动折算 xG 折扣；抓不到首发则自动回退到确认版/初版逻辑")
+    ss["stage"] = "终极版" if stage_sel.startswith("⚡") else stage_sel
 
 # ---------- 伤病获取：ESPN 自动抓取 + 手动录入兜底 ----------
 with st.expander("🏥 伤病获取（ESPN 自动抓取 + 手动录入兜底）"):
@@ -543,6 +545,28 @@ if ss["stage"] == "确认版" and not realtime_injury:
     st.warning("⛔ **暂无赛前 48h 实时伤病数据，无法生成确认版。** "
                "请在上方手动录入伤病名单（方案 C），否则本次生成会被逐场降级为初版（卡片右上角会标 [初版] 并在下方给出拦截提示）。")
 
+# ---------- P5：赛前 1 小时终极刷新 ----------
+with st.expander("⚡ 赛前 1 小时终极刷新（用官方首发反推常规主力缺失）", expanded=False):
+    st.markdown(
+        "**原理**：ESPN 没有结构化伤病接口，但 `summary` 里有逐人首发/替补名单（赛前约 60 分钟公布）。"
+        "系统把「本场 11 人首发」与「近 8 场统计出的常规主力库」比对：\n\n"
+        "- 常规主力在首发 → 战力满分\n"
+        "- 常规主力在替补席 → 扣一半（下半场能上，含超级替补价值）\n"
+        "- 常规主力完全不在名单 → 全额扣（约 0.10 DC 折扣/人，按历史首发率加权）\n\n"
+        "把上面阶段切到 **⚡ 终极版** 后点「生成预测」即触发；抓不到首发会自动回退，不会编造。")
+    _bl = None
+    try:
+        from data.baseline import load_baseline, BASELINE_FILE
+        _bl = load_baseline()
+        if _bl.get("teams"):
+            _ok = sum(1 for v in _bl["teams"].values() if v.get("available"))
+            st.caption(f"常规主力库：{_ok}/{len(_bl['teams'])} 队可用 · 近 {_bl.get('window_matches')} 场统计 · "
+                       f"更新于 {_bl.get('updated_at')}（样本不足的队会回退为不扣分）")
+        else:
+            st.caption("常规主力库尚未构建：运行 `python -m data.baseline 8`（约 1–2 分钟）生成后即可使用。")
+    except Exception:
+        st.caption("常规主力库读取失败（不影响预测，只是首发反推不生效）")
+
 # ================= 预测输出 =================
 # P4·优先级一②③：按钮防抖禁用 + 全局异常兜底（超限红条，不抛堆栈）
 if st.button("生成预测", type="primary", disabled=ss.get("_running", False)):
@@ -561,7 +585,8 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
         with st.spinner("AI 正在拉取数据并计算……"):
             result = pipe.predict_round(ss["round"], stage=ss["stage"],
                                         manual_injuries=merged, competition=ss["competition"],
-                                        luck_map=_luck_map())
+                                        luck_map=_luck_map(),
+                                        with_lineup=(ss["stage"] == "终极版"))
     except Exception:
         ss["_running"] = False
         st.error("⚠️ 当前请求过载，请 1 分钟后再试。")
@@ -580,9 +605,14 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
 
     # ---------- 本轮推荐速览表（顶部，便于一键截图；用 Markdown 表格，避免 pyarrow/NumPy 兼容问题） ----------
     if not result.get("comp_unavailable") and cards:
+        _n_lu_top = sum(1 for c in cards if (c.get("lineup") or {}).get("available"))
         # P5·伤病提醒横幅：赛前未抓到任何伤病数据 → 醒目提示（初版纯基准，建议录入/抓取生成确认版）
         if not realtime_injury:
-            st.error("⚠️ **暂无实时伤病数据，当前为初版纯基准概率，建议手动录入伤病或点击自动抓取以生成确认版！**")
+            if ss["stage"] == "终极版" and _n_lu_top:
+                st.error(f"⚡ **无实时伤病数据，但已用官方首发反推**常规主力缺失（{_n_lu_top}/{len(cards)} 场），"
+                         "每场的「首发对比」条会列出谁在替补席/不在名单及折算的 xG 扣减。")
+            else:
+                st.error("⚠️ **暂无实时伤病数据，当前为初版纯基准概率，建议手动录入伤病或点击自动抓取以生成确认版！**")
         # P3·移动端：卡片式布局替代宽表格（st.container border + st.progress，无需横向滑动）
         st.markdown("### 📋 本轮推荐速览（胜平负 + 推荐比分）")
         for idx, c in enumerate(cards, 1):
@@ -592,7 +622,8 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
             with st.container(border=True):
                 hl, hr = st.columns([3, 1])
                 hl.markdown(f"**{idx}. {c['home_team']} vs {c['away_team']}**")
-                hr.markdown(f"阶段 `{c['stage']}`", help="初版=基准；确认版=含伤病复算")
+                hr.markdown(f"阶段 `{c['stage']}`",
+                            help="初版=基准；确认版=含伤病复算；终极版=赛前官方首发反推")
                 st.markdown(f"推荐 **{pick}** · 最可能比分 `{top}`")
                 st.progress(p["home_win"], text=f"主胜 {p['home_win']:.0%}")
                 st.progress(p["draw"], text=f"平局 {p['draw']:.0%}")
@@ -603,6 +634,18 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
     blocked = [c for c in cards if c.get("confirm_blocked")]
     if blocked:
         st.warning(f"⚠️ 有 {len(blocked)} 场因**暂无赛前 48h 实时伤病数据**被降级为初版，未生成确认版。")
+
+    # P5·终极版：首发覆盖情况（没抓到就如实说明已回退）
+    if ss["stage"] == "终极版" and not result.get("comp_unavailable"):
+        n_lu = sum(1 for c in cards if (c.get("lineup") or {}).get("available"))
+        if n_lu == 0:
+            st.warning("⚠️ 本轮**没有任何一场拿到官方首发**（ESPN 在本场开球前约 60 分钟才填名单）。"
+                       "已按无首发回退：仅用上面的手动录入 / 基准概率，未凭空推断谁缺阵。"
+                       "请在开球前 1 小时内再点一次。")
+        elif n_lu < len(cards):
+            st.success(f"✅ 已用官方首发反推 **{n_lu}/{len(cards)}** 场；其余 {len(cards)-n_lu} 场官方首发尚未公布，按回退处理。")
+        else:
+            st.success(f"✅ 全部 {n_lu} 场都用官方首发反推完成。")
 
     # 每场卡片（P4·优先级三①：折叠面板，标题带推荐方向与概率；展开才看明细）
     for c in cards:
@@ -657,18 +700,33 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
                 markers.append(f"📈 {c['away_team']} 进攻端触底反弹（近5场 gap {lk['away_gap']}）")
             if markers:
                 st.warning("；".join(markers))
+            # ---------- P5：首发对比（终极版核心展示） ----------
+            lu = c.get("lineup") or {}
+            if lu.get("available"):
+                _lines = [x for x in (lu.get("detail_lines") or {}).values() if x]
+                _has_shift = (c.get("lineup_shift") or {}).get("home") or (c.get("lineup_shift") or {}).get("away")
+                _txt = "⚠️ **首发对比**：" + " ｜ ".join(_lines)
+                if _has_shift:
+                    _txt += (f"　→ 已自动扣除 xG：{c['home_team']} -{lu.get('xg_home', 0):.2f}"
+                             f" / {c['away_team']} -{lu.get('xg_away', 0):.2f}")
+                    st.error(_txt)
+                else:
+                    st.success(_txt)
             st.markdown(f"**胜/平/负**　主胜 `{p['home_win']}` · 平 `{p['draw']}` · 客胜 `{p['away_win']}`")
             if ss["competition"] == "CL":
                 st.caption("欧冠跨赛事预测：德甲队用模型 Elo，其他联赛对手用精选豪门/联赛平均 Elo 兜底（未实时校准）。")
-            # 确认版：展示初版→确认版概率对比（injury_shift）
+            # 确认版/终极版：展示初版→当前阶段概率对比（injury_shift）
             if c.get("confirm_probs"):
                 bp = c["base_probs"]
                 ish = c.get("injury_shift", {})
-                st.markdown("**初版→确认版**　" + "　".join(
-                    f"`{k}{'主' if k=='home_win' else ('平' if k=='draw' else '客')}胜`"
+                _stage_word = "终极版" if c.get("stage") == "终极版" else "确认版"
+                st.markdown(f"**初版→{_stage_word}**　" + "　".join(
+                    f"`{'主胜' if k=='home_win' else ('平局' if k=='draw' else '客胜')}`"
                     f"{bp[k]}→{c['confirm_probs'][k]}"
                     for k in ("home_win", "draw", "away_win")))
-                st.markdown(f"**伤病偏移（按重要性加权）**　主`{ish['home']}` / 客`{ish['away']}`（R2 injury_shift，未标定）")
+                st.markdown(f"**折扣偏移（来源：{c.get('shift_source', '—')}）**　主`{ish['home']}` / 客`{ish['away']}`"
+                            + ("（首发反推 / R2 口径，未标定）" if c.get("stage") == "终极版"
+                               else "（R2 injury_shift，未标定）"))
             st.markdown(f"**比分 Top2**　" + "　".join(f"`{s['score']}`({s['prob']})" for s in c["score_top2"]))
             st.markdown(f"**让球**　`{c['handicap_direction']['line']}` · 谨慎度 `{c['handicap_direction']['caution']}`")
             st.markdown(f"**数据**　{c['data_availability']} · 伤病 "

@@ -21,3 +21,8 @@ data/historical/cl_*.json
 
 # 本地伤病缓存（运行时持久化，含用户手动录入，勿入库）
 data/injuries_backup.json
+
+# P5 首发抓取缓存（运行时拉取，可随时重建）。注意：data/baseline_xi.json 必须入库，
+# 否则公网 Streamlit Cloud 上拿不到常规主力库，首发反推会静默失效。
+data/lineup_p5_cache.json
+data/scoreboard_p5_cache.json

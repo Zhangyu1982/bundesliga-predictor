@@ -86,6 +86,22 @@ RULES = {
     },
 }
 
+# ============ P5 · 赛前首发反推（终极刷新） ============
+# 用赛前公布的首发名单反推常规主力缺失，替换/补充手动伤病录入。
+# 单位与 RULES.injury_shift.key_out_shift 对齐：缺 1 名常规主力 = DC 攻击折扣 0.10。
+LINEUP_SHIFT = {
+    "unit_shift": 0.10,          # 1 名常规主力完全缺阵的折扣
+    "bench_factor": 0.5,         # 在替补席 → 半额（下半场能上，含超级替补价值）
+    "max_total_shift": 0.30,     # 单队累计上限（与 injury_shift 一致）
+    "core_rate": 0.6,            # 首发率达到该值的球员算"常规主力"
+    "window_matches": 8,         # 基线统计窗口：近 N 场首发
+    "refresh_window_minutes": 90,  # 进入"终极刷新"的开球前窗口（分钟）
+    "calibrated": False,
+    "calibration_note": "首发反推的边际影响（0.10/人、替补席折半）为启发式，未用历史首发-赛果回归标定；"
+                        "ESPN 不提供逐人出场分钟，无法据此区分「打满90分钟」与「60分钟被换下」",
+}
+
+
 # ============ 规则日志映射（R1–R5 各落独立 JSONL） ============
 LOG_DIR = "./logs"
 RULE_LOGS = {

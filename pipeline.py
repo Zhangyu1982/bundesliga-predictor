@@ -157,7 +157,8 @@ class PredictionPipeline:
                       realtime_injury_available: bool = False,
                       fatigue: dict | None = None,
                       competition: str = "BL1",
-                      luck_map: dict | None = None) -> dict:
+                      luck_map: dict | None = None,
+                      lineup: dict | None = None) -> dict:
         home, away = match["home_team"], match["away_team"]
         home_code = match.get("home_code", home)
         away_code = match.get("away_code", away)
@@ -165,15 +166,43 @@ class PredictionPipeline:
         confidence = match.get("confidence", "中")
 
         # ---------- 验收条件 #3：确认版实时伤病闸门 ----------
-        confirm_blocked = stage == "确认版" and not realtime_injury_available
+        confirm_blocked = stage in ("确认版", "终极版") and not realtime_injury_available \
+            and not (lineup and lineup.get("available"))
         if confirm_blocked:
-            stage = "初版"   # 拦截：零密钥源无实时伤病，无法生成确认版
+            stage = "初版"   # 拦截：既无实时伤病、也无官方首发，无法生成确认版
 
         # 无伤病数据标注（验收条件 #4 / 风险提示）
         inj = match.get("injuries", {})
         injury_lists = [inj.get(k, []) for k in
                         ("home_key_out", "away_key_out", "home_doubtful", "away_doubtful")]
         no_injury_data = not any(injury_lists)
+
+        # ---------- P5：赛前首发反推（把首发偏差折成 DC 攻击折扣） ----------
+        lineup_dev = {"home": {}, "away": {}}
+        lineup_shift = {"home": 0.0, "away": 0.0}
+        lineup_info = {"available": False, "note": "未获取到本场官方首发（赛前约 60 分钟才公布）"}
+        _base_lambda = float(getattr(self._bundle, "dc_mu_home", 1.5) or 1.5)
+        if lineup and lineup.get("available") and competition == "BL1":
+            from data.baseline import load_baseline
+            from lineup_shift import starter_deviation, describe_shift, xg_equivalent
+            bl_teams = (load_baseline() or {}).get("teams", {}) or {}
+            details = {"home": "", "away": ""}
+            for side, code, team_name in (("home", home_code, home), ("away", away_code, away)):
+                dev = starter_deviation(bl_teams.get(code), lineup.get(side))
+                lineup_dev[side] = dev
+                lineup_shift[side] = float(dev.get("shift", 0.0) or 0.0)
+                details[side] = describe_shift(team_name, dev, _base_lambda)
+            lineup_info = {
+                "available": True,
+                "source": lineup.get("source", "ESPN 首发名单"),
+                "event_id": lineup.get("event_id"),
+                "ready_at": lineup.get("ready_at"),
+                "home": lineup_dev["home"], "away": lineup_dev["away"],
+                "detail_lines": details,
+                "xg_home": xg_equivalent(lineup_shift["home"], _base_lambda),
+                "xg_away": xg_equivalent(lineup_shift["away"], _base_lambda),
+                "note": "首发反推：常规主力在首发=满分，在替补席=半额，不在名单=全额",
+            }
 
         # ---------- 疲劳特征（欧战/杯赛干扰，进 GBM 特征库语义） ----------
         f = (fatigue or {}).get(match_id) or {}
@@ -233,14 +262,20 @@ class PredictionPipeline:
         base_probs = {k: round(v, 3) for k, v in probs.items()}
         inj_shift = {"home": 0.0, "away": 0.0}
 
-        # ---------- 确认版复算：把伤病名单折成 DC 偏移，重算概率 ----------
+        # ---------- 确认版/终极版复算：把伤病名单（+首发偏差）折成 DC 偏移，重算概率 ----------
         confirm_probs = None
-        if stage == "确认版" and not no_injury_data and competition == "BL1":
+        manual_shift = {"home": 0.0, "away": 0.0}
+        if stage in ("确认版", "终极版") and competition == "BL1" \
+                and (not no_injury_data or lineup_info.get("available")):
             is_shift = self._injury_shift
-            inj_shift["home"] = is_shift(inj.get("home_key_out", []),
-                                         inj.get("home_doubtful", []))
-            inj_shift["away"] = is_shift(inj.get("away_key_out", []),
-                                         inj.get("away_doubtful", []))
+            manual_shift["home"] = is_shift(inj.get("home_key_out", []),
+                                            inj.get("home_doubtful", []))
+            manual_shift["away"] = is_shift(inj.get("away_key_out", []),
+                                            inj.get("away_doubtful", []))
+            # 首发反推是硬证据（谁真的没上），手动录入是赛前情报；两者都反映"谁不能打"，
+            # 取较大值避免同一缺失被重复扣两次。
+            for k in ("home", "away"):
+                inj_shift[k] = max(manual_shift[k], lineup_shift[k])
             if inj_shift["home"] or inj_shift["away"]:
                 res_c = self._probs_for(home_code, away_code, home_disc=disc_h, away_disc=disc_a,
                                         inj_shift_h=inj_shift["home"], inj_shift_a=inj_shift["away"])
@@ -248,6 +283,16 @@ class PredictionPipeline:
                 validate_probs(confirm_probs)
                 probs = confirm_probs   # 卡片主概率 = 确认版复算结果
                 res = res_c
+
+        # 偏移来源标注
+        if lineup_info.get("available") and (manual_shift["home"] or manual_shift["away"]):
+            shift_source = "首发反推 + 手动伤病（取较大值）"
+        elif lineup_info.get("available"):
+            shift_source = "赛前首发反推"
+        elif manual_shift["home"] or manual_shift["away"]:
+            shift_source = "手动伤病录入"
+        else:
+            shift_source = "无"
 
         # ---------- R4 分歧场次标注：Elo vs DC 方向不一致 → 降一档 ----------
         elo_dir = "home_win" if res["elo"]["home_win"] > 0.5 else "away_win"
@@ -270,13 +315,16 @@ class PredictionPipeline:
         self.rules.track_round_seq(home_code, round_no, match_id)
         self.rules.track_round_seq(away_code, round_no, match_id)
 
-        if stage == "确认版" and confirm_probs is not None:
-            note = (f"确认版复算：伤病偏移 主队{inj_shift['home']:.2f}／客队{inj_shift['away']:.2f}（DC 攻击折扣口径）。"
+        if stage in ("确认版", "终极版") and confirm_probs is not None:
+            head = "终极刷新（首发反推）" if stage == "终极版" else "确认版复算"
+            note = (f"{head}：偏移来源={shift_source}；偏移 主队{inj_shift['home']:.2f}／客队{inj_shift['away']:.2f}（DC 攻击折扣口径）。"
                     f"主 {base_probs['home_win']:.1%}→{confirm_probs['home_win']:.1%}、"
                     f"平 {base_probs['draw']:.1%}→{confirm_probs['draw']:.1%}、"
                     f"客 {base_probs['away_win']:.1%}→{confirm_probs['away_win']:.1%}。")
+            if lineup_info.get("available"):
+                note += "｜" + "；".join(x for x in (lineup_info.get("detail_lines") or {}).values() if x) + "。"
             if abs(inj_shift["home"] - inj_shift["away"]) < 0.03 and inj_shift["home"] > 0:
-                note += "两队伤病量近似对称，净影响本身就小（属对称抵消，不是没生效）。"
+                note += "两队偏移量近似对称，净影响本身就小（属对称抵消，不是没生效）。"
         else:
             note = div["note_prefix"] + ("无伤病数据，输出基准概率。" if no_injury_data
                                          else "临场缺阵或前场创造力缺失。")
@@ -333,6 +381,10 @@ class PredictionPipeline:
             "base_probs": base_probs,
             "confirm_probs": {k: round(v, 3) for k, v in confirm_probs.items()} if confirm_probs else None,
             "injury_shift": inj_shift,
+            "manual_shift": manual_shift,
+            "lineup_shift": lineup_shift,
+            "shift_source": shift_source,
+            "lineup": lineup_info,
             "luck": luck_info,
             "score_top2": res["score_top2"],
             "pick": {"home_win": f"{home}胜", "away_win": f"{away}胜", "draw": "平局"}[pick_dir],
@@ -350,7 +402,7 @@ class PredictionPipeline:
                                 "dc_score_top2": [s["score"] for s in res["score_top2"]]},
         }
 
-        # 确认版强制 48h 窗口校验（窗口取自 config.RULES.R2）
+        # 确认版强制 48h 窗口校验（窗口取自 config.RULES.R2）；终极版是临场首发反推，不受该窗口约束
         if stage == "确认版" and not validate_stage_window(
                 card["last_updated"], card["kickoff"],
                 RULES["R2_injury_upgrade"]["confirm_window_hours"]):
@@ -537,7 +589,8 @@ class PredictionPipeline:
                       is_first_round_after_fifa: bool = False,
                       manual_injuries: dict | None = None,
                       competition: str = "BL1",
-                      luck_map: dict | None = None) -> dict:
+                      luck_map: dict | None = None,
+                      with_lineup: bool | None = None) -> dict:
         if competition == "BL1":
             fixtures, meta = self.fetch_round(round_no)
         elif competition == "CL":
@@ -601,6 +654,22 @@ class PredictionPipeline:
                 fatigue_map = {}
 
         cards = []
+        # P5：终极版（首发反推）才去抓官方首发；普通初版/确认版不打这个网络请求
+        want_lineup = (with_lineup if with_lineup is not None else (stage == "终极版"))
+        lineup_map = {}
+        if want_lineup and competition == "BL1":
+            try:
+                from data.lineup import find_event_id, fetch_match_lineup
+                for m in fixtures:
+                    eid = find_event_id(m.get("home_code", ""), m.get("away_code", ""),
+                                        m.get("kickoff", ""), "BL1")
+                    if eid:
+                        lu = fetch_match_lineup(eid, "BL1")
+                        if lu.get("available"):
+                            lineup_map[m.get("match_id")] = lu
+            except Exception:
+                lineup_map = {}
+
         if fixtures:
             for match in fixtures:
                 cards.append(self.predict_match(
@@ -608,7 +677,8 @@ class PredictionPipeline:
                     is_first_round_after_fifa=is_first_round_after_fifa,
                     realtime_injury_available=meta["realtime_injury_available"],
                     fatigue=fatigue_map, competition=competition,
-                    luck_map=luck_map))
+                    luck_map=luck_map,
+                    lineup=lineup_map.get(match.get("match_id"))))
         else:
             # 无数据轮次：GBM 兜底退化 DC，输出基准概率（不抛 500）
             cards.append(self._baseline_card(round_no))
