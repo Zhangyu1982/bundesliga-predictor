@@ -31,7 +31,7 @@ IMPORTANCE_LEVELS = ["核心", "轮换", "替补"]
 CATBOOST_MIN_SAMPLES = 2000   # 德甲数据 <=2000 场时禁用 CatBoost（防过拟合）
 
 # ============ 分期/阶段 ============
-STAGES = ["初版", "确认版"]
+STAGES = ["初版", "确认版", "终极版"]   # 修复：P5 终极版之前不在枚举里
 
 # ============ config.RULES —— 唯一阈值入口（v1.1 精确结构）
 # 规则名 R1–R5 锁定不变；所有阈值外置于此。calibrated=false 项仅作占位示意，须回测后定稿。
@@ -108,9 +108,11 @@ LINEUP_SHIFT = {
     # 基线是静态快照：夏窗/冬窗卖掉的人会一直留在库里，被当成"主力缺失"重扣；
     # 新援则完全不在库里。以下三项用于修正该盲区。
     "roster_check": True,        # 计算偏差前，先用当前大名单校验基线球员是否还在队
+    "roster_min_players": 20,    # 大名单人数低于该值视为"残缺名单"→ 跳过校验（实测 ESPN 各队 27–35 人）
     "roster_cache_hours": 24,    # 大名单缓存 TTL（一次构建 18 队，不必每次刷新都拉）
     "roster_ttl_grace_hours": 72,  # 超过该时长未更新基线 → 提示重建（假期/转会窗内尤其）
     "drift_warn_ratio": 0.25,    # 基线 XI 中已离队比例超过该值 → 判定"阵容洗牌，需重建"
+    "departed_warn_ratio": 0.6,  # 已离队比例超过该值 → 基线大概率过期：提示 + 进日志（不回退校验）
     "bench_depth_warn": 3,       # 基线 XI 剩不足该人数 → 说明基线已不可用
     "newcomer_hint": True,       # 本场首发但基线窗口内从未首发 → UI 提示"新援/奇兵"
     "calibrated": False,
@@ -290,4 +292,11 @@ def uncalibrated_thresholds() -> list[str]:
     for key, cfg in RULES.items():
         if not cfg.get("calibrated", True):
             out.append(key)
+    # 修复：这几个模块同样是 calibrated=False，之前漏报 → 顶部黄条只提示了一半
+    for key, cfg in (("LINEUP_SHIFT", LINEUP_SHIFT), ("FATIGUE_RULES", FATIGUE_RULES),
+                     ("LUCK_REGRESSION", LUCK_REGRESSION),
+                     ("MOTIVATION_RULES", MOTIVATION_RULES)):
+        if not cfg.get("calibrated", True):
+            out.append(key)
     return out
+

@@ -17,6 +17,9 @@ from data.historical_data import (load_seasons, add_rolling_features,
                                   team_last_state, CODE2ENG, ENG2CODE)
 
 ARTIFACT_PATH = os.path.join(os.path.dirname(__file__), "artifacts", "models.pkl")
+# 修复：pickle 反序列化不会调用 __init__，旧 artifact 缺字段会在使用时 AttributeError。
+# 加版本号，读到的产物版本不符就直接重训。
+_BUNDLE_VERSION = 4
 
 FEATURE_COLS = ["elo_diff", "form_home", "form_away", "roll_hg_home", "roll_hg_away",
                 "roll_hst_home", "roll_hst_away", "h2h_hg", "h2h_ag"]
@@ -44,6 +47,7 @@ class ModelBundle:
         self.gbm_lgb = None
         self.df: pd.DataFrame | None = None      # 最新历史（含滚动特征状态）
         self.metrics: dict = {}
+        self.version = _BUNDLE_VERSION            # 修复：旧 artifact 无此字段 → 触发重训
 
     # ---------- 三向概率：Elo ----------
     def elo_prob(self, home: str, away: str) -> dict:
@@ -64,6 +68,10 @@ class ModelBundle:
 
     def dc_score_matrix(self, home: str, away: str, max_goals: int = 8,
                         home_disc: float = 0.0, away_disc: float = 0.0) -> dict:
+        # 修复：折扣 >=1 时 λ 落到 1e-6，矩阵几乎全压在 0:0 → 输出趋近"100% 平局"。
+        # 上限 0.90，任何上游叠加错误都退化成"强折扣"而不是"平局"。
+        home_disc = min(max(float(home_disc or 0.0), 0.0), 0.90)
+        away_disc = min(max(float(away_disc or 0.0), 0.0), 0.90)
         a_h = max(self.dc_attack.get(home, 1.0) * (1.0 - home_disc), 1e-6)
         a_a = max(self.dc_attack.get(away, 1.0) * (1.0 - away_disc), 1e-6)
         lam = max(self.dc_mu_home * a_h * self.dc_defence.get(away, 1.0), 1e-6)
@@ -73,7 +81,8 @@ class ModelBundle:
             for j in range(max_goals + 1):
                 p = (np.exp(-lam) * lam ** i / math.factorial(i)
                      * np.exp(-mu) * mu ** j / math.factorial(j))
-                m[(i, j)] = p * self._dc_tau(i, j, lam, mu)
+                # 修复：_dc_tau 在 rho>0 且 lam*mu 较大时会变负 → 负概率。
+                m[(i, j)] = p * max(self._dc_tau(i, j, lam, mu), 1e-9)
         return m
 
     def _dc_tau(self, i: int, j: int, lam: float, mu: float) -> float:
@@ -194,7 +203,8 @@ def fit_dixon_coles(df: pd.DataFrame, decay_grid=(0.0, 0.01, 0.02, 0.03, 0.05)) 
 
 
 def _fit_rho(df: pd.DataFrame, bundle: ModelBundle,
-             grid=(-0.25, -0.20, -0.15, -0.10, 0.0, 0.10, 0.15, 0.20)) -> float:
+             # 修复：DC 的 rho 理论区间在负侧；正 rho 会让 tau(0,0)=1-lam*mu*rho 变负
+             grid=(-0.30, -0.25, -0.20, -0.15, -0.10, -0.05, 0.0)) -> float:
     best = (1e18, DC_RHO)
     for rho in grid:
         bundle.dc_rho = rho
@@ -243,6 +253,29 @@ def attach_elo_diff(df: pd.DataFrame, bundle: ModelBundle) -> pd.DataFrame:
     return df
 
 
+def attach_elo_diff_rolling(df: pd.DataFrame, k: float, home_adv: float) -> pd.DataFrame:
+    """按时间滚动计算**赛前** Elo 差分（修复训练期目标泄漏）。
+
+    与 attach_elo_diff 的区别：后者用"最终"评分回填历史，属于 look-ahead；
+    这里每场先用当前评分算 diff，再按同样规则更新评分，等价于"当时能看到的"。
+    """
+    df = df.copy()
+    ratings: dict = {}
+    diffs = []
+    for row in df.itertuples():
+        rh = ratings.get(row.HomeTeam, 1500.0)
+        ra = ratings.get(row.AwayTeam, 1500.0)
+        diffs.append((rh + home_adv) - ra)
+        eff = _sigmoid((rh + home_adv - ra) / 400.0)
+        actual = 1.0 if row.FTR == "H" else (0.5 if row.FTR == "D" else 0.0)
+        margin = abs(row.FTHG - row.FTAG)
+        w = 1.0 if margin <= 1 else (1.5 if margin <= 2 else 2.0)
+        ratings[row.HomeTeam] = rh + k * (actual - eff) * w
+        ratings[row.AwayTeam] = ra - k * (actual - eff) * w
+    df["elo_diff"] = diffs
+    return df
+
+
 def build_feature_vector(bundle: ModelBundle, home: str, away: str) -> dict:
     """对一场待预测比赛构建 GBM 特征向量。"""
     hs = team_last_state(bundle.df, home)
@@ -264,8 +297,16 @@ def build_feature_vector(bundle: ModelBundle, home: str, away: str) -> dict:
 def train(force: bool = False, verbose: bool = True) -> ModelBundle:
     """完整训练并缓存。"""
     if not force and os.path.exists(ARTIFACT_PATH):
-        with open(ARTIFACT_PATH, "rb") as f:
-            return pickle.load(f)
+        # 修复：pickle 不走 __init__，旧产物缺 dc_mu_home 等字段会在使用时 AttributeError。
+        # 版本不符/读取异常一律重训，而不是把坏产物返回给上层。
+        try:
+            with open(ARTIFACT_PATH, "rb") as f:
+                _b = pickle.load(f)
+            if getattr(_b, "version", 0) == _BUNDLE_VERSION:
+                return _b
+            print("[trainer] 旧 artifact 版本不符，重新训练")
+        except Exception as _e:
+            print(f"[trainer] artifact 读取失败（{type(_e).__name__}），重新训练")
     t0 = time.time()
     df = load_seasons()
     df = add_rolling_features(df)
@@ -289,7 +330,9 @@ def train(force: bool = False, verbose: bool = True) -> ModelBundle:
     bundle.metrics["dc_nll"] = dc_b.metrics["dc_nll"]
 
     # 3) GBM（含 Elo 差分特征）
-    df_e = attach_elo_diff(df, bundle)
+    # 修复：原实现用"跑完全部历史后的最终 Elo"回填每一场特征 → 目标泄漏 →
+    # 训练/线上特征分布不一致（GBM 输出离谱的根因之一）。改为按时间滚动取"赛前"评分。
+    df_e = attach_elo_diff_rolling(df, bundle.elo_k, bundle.elo_home_adv)
     gb = train_gbm(df_e)
     bundle.gbm_xgb, bundle.gbm_lgb = gb.gbm_xgb, gb.gbm_lgb
     bundle.df = df_e
@@ -320,3 +363,4 @@ def fused_prob(bundle: ModelBundle, home: str, away: str) -> dict:
     }
     s = sum(fused.values())
     return {k: v / s for k, v in fused.items()}
+

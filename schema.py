@@ -53,3 +53,4 @@ def validate_stage_window(last_updated: str, kickoff: str, window_hours: int) ->
     ko = _dt(kickoff)
     hours_before = (ko - updated).total_seconds() / 3600.0
     return 0 < hours_before <= window_hours
+

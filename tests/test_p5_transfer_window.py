@@ -36,7 +36,7 @@ XI = [{"name": f"P{i}", "id": str(1000 + i), "rate": 1.0, "pos": "M"} for i in r
 
 def test_departed_player_not_penalised():
     """凯恩式场景：人已转会，仍留在基线里 → 不能算缺阵扣分。"""
-    ros = {"ids": [str(1000 + i) for i in range(2, 12)]}       # 缺 P1
+    ros = {"ids": [str(1000 + i) for i in range(2, 24)]}       # 缺 P1
     starters = [{"name": f"P{i}", "id": str(1000 + i)} for i in range(2, 12)] + \
                [{"name": "New", "id": "9999"}]
     dev = starter_deviation(_entry(XI), _lineup(starters), roster=ros)
@@ -69,7 +69,7 @@ def test_roster_check_can_be_disabled():
 
 def test_departed_isolated_when_others_absent():
     """离队的人不扣，真正缺阵的人要照样扣——两者不能混。"""
-    ros = {"ids": [str(1000 + i) for i in range(2, 12)]}       # P1 离队
+    ros = {"ids": [str(1000 + i) for i in range(2, 24)]}       # P1 离队
     starters = [{"name": f"P{i}", "id": str(1000 + i)} for i in range(3, 12)] + \
                [{"name": "New", "id": "9999"}]
     dev = starter_deviation(_entry(XI), _lineup(starters), roster=ros)
@@ -107,7 +107,7 @@ def test_newcomer_detected_from_never_started():
     starters = [{"name": f"P{i}", "id": str(1000 + i)} for i in range(2, 12)] + \
                [{"name": "Wunderkind", "id": "8888", "pos": "F"}]
     dev = starter_deviation(_entry(XI, seen=XI), _lineup(starters),
-                            roster={"ids": [str(1000 + i) for i in range(2, 12)] + ["8888"]})
+                            roster={"ids": [str(1000 + i) for i in range(2, 24)] + ["8888"]})
     assert [x["name"] for x in dev["newcomers"]] == ["Wunderkind"]
     assert dev["newcomers"][0]["pos"] == "F"
     # 新援不参与扣分：P1 离队剔除后，其余 10 人都在首发 → 0
@@ -153,9 +153,46 @@ def test_id_key_prefers_id_and_falls_back_to_name():
 
 
 def test_describe_mentions_departed_and_unchecked():
-    ros = {"ids": [str(1000 + i) for i in range(2, 12)]}
+    ros = {"ids": [str(1000 + i) for i in range(2, 24)]}
     starters = [{"name": f"P{i}", "id": str(1000 + i)} for i in range(2, 12)] + \
                [{"name": "New", "id": "9999"}]
     dev = starter_deviation(_entry(XI), _lineup(starters), roster=ros)
     txt = describe_shift("拜仁", dev, base_lambda=1.5)
     assert "离队" in txt and "P1" in txt
+
+
+# ---------------- 5. 名单可信度（残缺名单守卫） ----------------
+
+def test_suspect_roster_skips_check():
+    """名单人数异常偏少（< roster_min_players）→ 判 suspect，整体跳过校验。
+
+    宁可"不校验"也不能拿残缺名单把在队球员当成离队剔掉。
+    """
+    from config import LINEUP_SHIFT
+    ros = {"ids": [str(1000 + i) for i in range(2, 12)]}      # 11 人，远低于真实 27–35
+    assert len(ros["ids"]) < LINEUP_SHIFT["roster_min_players"]
+    dev = starter_deviation(_entry(XI), _lineup(XI), roster=ros)
+    assert dev["roster_check"] == "roster_suspect"
+    assert dev["shift"] == 0.0 and dev["departed"] == []
+    assert "大名单异常" in describe_shift("拜仁", dev)
+    # 基线侧（prune_by_roster）必须给出同一判定，两处口径不能分叉
+    kept, _, dep, status = prune_by_roster([dict(p) for p in XI], [], ros, LINEUP_SHIFT)
+    assert status == "roster_suspect" and len(kept) == 11 and dep == []
+
+
+def test_shakeup_keeps_prefix_contract():
+    """冬窗大换血（离队过半）→ 照常剔除、不扣分，只提示重建。
+
+    锁住 P5.1 的核心承诺：离队的人永远不参与扣分，
+    不能因为"离队比例高"就回退成"全员缺阵扣分"。
+    """
+    ros = {"ids": [str(1000 + i) for i in range(8, 24)]}
+    ros["ids"] += [str(3000 + i) for i in range(20)]          # 补足到 20 人以上，避开 suspect
+    starters = [{"name": f"P{i}", "id": str(1000 + i)} for i in range(8, 12)] + \
+               [{"name": f"N{i}", "id": str(3000 + i)} for i in range(7)]
+    dev = starter_deviation(_entry(XI), _lineup(starters), roster=ros)
+    assert dev["roster_check"] == "ok"
+    assert [d["name"] for d in dev["departed"]] == ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]
+    assert dev["shift"] == 0.0                       # 走的 7 个不扣，剩余 4 个都首发
+    assert dev["roster_shakeup"] is True
+    assert "重建" in describe_shift("拜仁", dev)

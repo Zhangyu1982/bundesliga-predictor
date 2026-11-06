@@ -95,3 +95,4 @@ def unparsed_lines(text: str) -> list[str]:
         if not any(k and (k in team_part or team_part in k) for k in keys):
             bad.append(line)
     return bad
+

@@ -235,7 +235,11 @@ if cached:
 st.markdown(f"🕓 **{label}**　·　来源：{freshness.get('source','—')}")
 
 # ---------- 验收条件 #2：未标定阈值黄色警告横幅 ----------
-uncal = pipe.round_global_summary(9)["uncalibrated_thresholds"]
+# 修复：这里在最外层，KeyError 会让整页白屏。改为 .get + 兜底。
+try:
+    uncal = pipe.round_global_summary(9).get("uncalibrated_thresholds") or []
+except Exception:
+    uncal = []
 if uncal:
     names = "、".join(UNCAL_LABEL.get(k, k) for k in uncal)
     st.warning(f"⚠️ **{names}未标定，仅供参考。**（calibrated=false，须真实德甲历史/伤病数据回测后定稿）")
@@ -477,8 +481,10 @@ with st.expander("🏥 伤病获取（ESPN 自动抓取 + 手动录入兜底）"
         with st.spinner("正在抓取 ESPN 伤病接口 + 德甲新闻……"):
             try:
                 res, used_backup = _espn_fetch_with_fallback()
-            except Exception:
-                st.error("⚠️ 当前请求过载，请 1 分钟后再试。")
+            except Exception as _e:
+                # 修复：不再把一切异常统一伪装成"过载"，否则线上无法排障
+                st.error("⚠️ 抓取失败，请稍后重试。")
+                st.caption(f"错误类型：{type(_e).__name__}：{_e}")
                 st.stop()
             ss["auto_candidates"] = res["candidates"]
             ss["auto_note"] = res["note"]
@@ -655,32 +661,37 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
         st.info("正在生成中，请稍候……")
         st.stop()
     ss["_running"] = True
-    manual = _parse_manual_injuries(ss["manual_injuries"])
-    checked = []
-    if ss["auto_candidates"]:
-        checked = [dict(c, importance=st.session_state.get(f"cand_imp_{i}", "核心"))
-                   for i, c in enumerate(ss["auto_candidates"])
-                   if st.session_state.get(f"cand_{i}", False)]
-    merged = _merge_injuries(manual, checked)
     try:
+        # 修复：解析/合并原来在 try 之外，一旦抛异常 _running 永远停在 True，
+        # 三个按钮全部 disabled（页面"卡死"）。现在整段收进 try，finally 必复位。
+        manual = _parse_manual_injuries(ss["manual_injuries"])
+        checked = []
+        if ss["auto_candidates"]:
+            checked = [dict(c, importance=st.session_state.get(f"cand_imp_{i}", "核心"))
+                       for i, c in enumerate(ss["auto_candidates"])
+                       if st.session_state.get(f"cand_{i}", False)]
+        merged = _merge_injuries(manual, checked)
         with st.spinner("AI 正在拉取数据并计算……"):
             result = pipe.predict_round(ss["round"], stage=ss["stage"],
                                         manual_injuries=merged, competition=ss["competition"],
                                         luck_map=_luck_map(),
                                         with_lineup=(ss["stage"] == "终极版"))
-    except Exception:
-        ss["_running"] = False
-        st.error("⚠️ 当前请求过载，请 1 分钟后再试。")
+    except Exception as _e:
+        st.error("⚠️ 生成失败，请稍后重试。")
+        st.caption(f"错误类型：{type(_e).__name__}：{_e}")
         st.stop()
-    ss["_running"] = False
+    finally:
+        ss["_running"] = False
     st.info(f"🕓 {result['freshness_label']}")
 
     # 免费层受限赛事（EL/DFB/欧协）→ 诚实提示
+    # 修复（P0）：cards 必须无条件绑定。原来只在 else 分支赋值，
+    # comp_unavailable=True 时下面 `if ... and cards` 直接 NameError → 免费层赛事必崩。
+    cards = result.get("cards") or []
     if result.get("comp_unavailable"):
         st.warning(f"⛔ **{COMPETITIONS.get(ss['competition'], {}).get('name','该赛事')} 免费层不可用**："
                    f"{result.get('comp_note')}。请使用德甲(BL1)或欧冠(CL)。")
     else:
-        cards = result["cards"]
         st.markdown(f"本轮共 **{len(cards)}** 场预测"
                     + ("（欧冠跨赛事 Elo）" if ss["competition"] == "CL" else "（德甲）"))
 
@@ -976,3 +987,4 @@ with st.expander("📊 历史回测看板（近3赛季 · 918场 walk-forward ·
 # ================= P4·优先级三②：合规免责声明 =================
 st.markdown("---")
 st.caption("🤖 预测基于概率模型，仅供参考。足球反买，别墅靠海。")
+

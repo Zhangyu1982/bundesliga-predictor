@@ -1,6 +1,9 @@
 """
 固定规范 v1.0 / 技术需求 v1.1 · 迭代规则 R1–R5 → 代码配置项 + 日志规则
 规则名锁定不变，阈值全部取自 config.RULES（唯一入口），禁止硬编码。
+例外：R1 的 Elo 运行参数（K / home_advantage）**必须来自训练产物 bundle**，不能读 config——
+训练时 `_fit_elo` 会网格搜索覆盖这两个值（实测 K=20 / home_adv=60，而 config 是 15/50），
+读 config 记下的"重校准前参数"是假的。
 
 R1 偏差记录        → 每轮赛后记录实际比分 vs 首选比分/胜平负倾向偏差；连续 consecutive_rounds 轮同方向偏差触发该队 Elo 重校准
 R2 伤病升级        → 初版标记"中/低置信度"的场次，赛前 48h 用最终伤病名单复算升级为"确认版"后作为最终输出
@@ -11,12 +14,41 @@ R5 连续跟踪        → 从第 9 轮起每轮记录编号连续累加；每�
 每个日志条目统一结构：{rule, match_id, event, ts, payload}，按 RULE_LOGS 写独立 JSONL。
 """
 from __future__ import annotations
-import json, os
+import json, logging, os
 from datetime import datetime
 from config import LOG_DIR, RULES, RULE_LOGS
 
+logger = logging.getLogger(__name__)
+
+
+def elo_params_from_bundle(bundle) -> dict:
+    """取 bundle 里实际生效的 Elo 参数；bundle 缺失时返回空来源标记，绝不回退到 config。"""
+    if bundle is None:
+        return {"K": None, "home_advantage": None, "source": "bundle_unavailable"}
+    return {"K": getattr(bundle, "elo_k", None),
+            "home_advantage": getattr(bundle, "elo_home_adv", None),
+            "source": "bundle"}
+
+
 # 置信度等级（从低到高），用于"降一档"
 _CONF_ORDER = ["低", "中", "高"]
+
+
+def _hours_before_kickoff(last_updated: str, kickoff: str):
+    """修复：kickoff 是 UTC(...Z)、last_updated 是本地 +08:00，
+    直接截断 [:19] 相减会差 8 小时（48h 窗口实际变 40h）。统一按带时区解析；
+    无法解析返回 None（调用方按"窗口外"处理，不抛异常）。"""
+    from datetime import timezone, timedelta
+    local_tz = timezone(timedelta(hours=8))
+
+    def _dt(s):
+        d = datetime.fromisoformat((s or "").strip().replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=local_tz)
+
+    try:
+        return (_dt(kickoff) - _dt(last_updated)).total_seconds() / 3600.0
+    except Exception:
+        return None
 
 
 class RuleLogger:
@@ -40,24 +72,37 @@ class RuleLogger:
         if os.path.exists(path):
             with open(path, encoding="utf-8") as f:
                 for line in f:
-                    if line.strip():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
                         rows.append(json.loads(line))
+                    except Exception:
+                        # 修复：坏行（并发写/进程被杀留下的半行）不能让每次 rerun 整站崩
+                        continue
         return rows
 
 
 class IterationRules:
-    def __init__(self, log_root: str = LOG_DIR):
+    def __init__(self, log_root: str = LOG_DIR, elo_params: dict | None = None):
         self.cfg = RULES
         self.logger = RuleLogger(log_root)
+        # R1 重校准日志里的"改前参数"：来自训练产物 bundle，不是 config 原值
+        self._elo_params = dict(elo_params or {})
         self._streak: dict[str, int] = {}      # team -> 连续同方向偏差轮数
         self._last_dir: dict[str, str] = {}    # team -> 上一轮偏差方向
         self._round_seq: dict[str, int] = {}   # team -> 连续轮编号（R5，自 start_round 起）
         self._last_round: dict[str, int] = {}  # team -> 上一跟踪轮次
 
+    def attach_elo_params(self, bundle=None, params: dict | None = None) -> None:
+        """从 bundle 或显式 dict 绑定实际 Elo 参数（pipeline 在加载模型后调用）。"""
+        self._elo_params = dict(params) if params else elo_params_from_bundle(bundle)
+
     # ============ R1 偏差记录 + 连续重校准 ============
     def record_deviation(self, match_id: str, team: str, pick_dir: str,
                          actual_dir: str, score_top2: list, actual_score: str,
-                         confidence: str, round_no: int) -> str:
+                         confidence: str, round_no: int,
+                         elo_params: dict | None = None) -> str:
         """记录该队偏差，更新连续同方向偏差计数；达阈值触发 Elo 重校准日志。返回 deviation_type。"""
         hit = actual_score in [s["score"] for s in score_top2]
         same_dir = pick_dir == actual_dir
@@ -82,11 +127,20 @@ class IterationRules:
              "consecutive_streak": self._streak.get(team, 0)})
 
         if self._streak.get(team, 0) >= n:
+            params = dict(elo_params or self._elo_params or {})
+            if not params:
+                params = {"K": None, "home_advantage": None, "source": "unavailable"}
+            if params.get("source") in ("bundle_unavailable", "unavailable"):
+                logger.warning(
+                    "R1 elo_recalibrate: 未绑定训练产物 Elo 参数（team=%s），"
+                    "日志中的 before 将为空——请通过 IterationRules(elo_params=...) 或 "
+                    "attach_elo_params(bundle) 绑定", team)
             self.logger.log(
                 "R1_bias_record", match_id, "elo_recalibrate",
                 {"team": team, "round": round_no, "streak": self._streak[team],
                  "consecutive_rounds": n, "recalib_target": ["K", "home_advantage"],
-                 "before": {"K": 15, "home_advantage": 50}})  # TODO: 重校准后记录真实参数
+                 "before": {"K": params.get("K"), "home_advantage": params.get("home_advantage")},
+                 "before_source": params.get("source", "unknown")})
         return dev_type
 
     def streak(self, team: str) -> int:
@@ -98,9 +152,11 @@ class IterationRules:
         """初版置信度 <= downgrade_confidence_below 且距开赛 <=48h → 须用最终伤病名单复算升级为确认版。"""
         conf_level = _CONF_ORDER.index(confidence) if confidence in _CONF_ORDER else 1
         below = _CONF_ORDER.index(self.cfg["R2_injury_upgrade"]["downgrade_confidence_below"])
-        hours = (datetime.fromisoformat(kickoff[:19])
-                 - datetime.fromisoformat(last_updated[:19])).total_seconds() / 3600
-        in_window = 0 < hours <= self.cfg["R2_injury_upgrade"]["confirm_window_hours"]
+        hours = _hours_before_kickoff(last_updated, kickoff)
+        if hours is None:
+            in_window = False          # 时间解析失败 → 按窗口外处理，绝不抛异常
+        else:
+            in_window = 0 < hours <= self.cfg["R2_injury_upgrade"]["confirm_window_hours"]
         need = conf_level <= below and in_window
         if need:
             self.logger.log(
@@ -178,3 +234,4 @@ class IterationRules:
         """上一轮偏差摘要（R5/R1 全局输出）。"""
         return [r for r in self.logger.read("R1_bias_record")
                 if r.get("event") == "record" and r.get("payload", {}).get("round") == round_no - 1]
+

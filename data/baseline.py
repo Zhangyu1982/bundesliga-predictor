@@ -71,6 +71,7 @@ def load_baseline() -> dict:
 
 def _write_json_atomic(path: str, data: dict) -> bool:
     """原子写：先写同目录临时文件，再 os.replace，避免写出半个 JSON。"""
+    tmp = None
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = f"{path}.tmp.{os.getpid()}.{int(time.time() * 1000)}"
@@ -216,15 +217,20 @@ def prune_by_roster(xi: list[dict], core: list[dict], roster: dict | None,
     """把"已经不在本队大名单"的基线球员剔除（不参与缺阵扣分）。
 
     返回 (xi_ok, core_ok, departed, status)
-      status: "ok"（校验过）/ "roster_unavailable"（名单没拿到，保持原样）/ "disabled"
+      status: "ok"（校验过）/ "roster_unavailable"（名单没拿到，保持原样）/
+              "roster_suspect"（名单人数异常偏少，不可信 → 跳过校验）/ "disabled"
     roster 为空时**原样返回**——抓不到名单不等于全队走光，这是本函数最重要的安全约定。
     """
     c = cfg or {}
     if c.get("roster_check") is False:
         return xi, core, [], "disabled"
-    ids = set((roster or {}).get("ids") or [])
+    ids = {str(x) for x in ((roster or {}).get("ids") or [])}
     if not ids:
         return xi, core, [], "roster_unavailable"
+    # 名单可信度守卫：实测 ESPN 各队 27–35 人；低于阈值（默认 20）多半是抓到残缺页/口径错位。
+    # 与 lineup_shift.starter_deviation 共用同一判据（roster_min_players），避免两处口径分叉。
+    if len(ids) < int(c.get("roster_min_players", 20)):
+        return xi, core, [], "roster_suspect"
 
     kept, departed = [], []
     for p in xi:
@@ -598,6 +604,21 @@ def maybe_auto_rebuild(current_round: int | None = None, league_key: str = "BL1"
     if not force and c.get("auto_rebuild") is False:
         return {"started": False, "reason": "disabled"}
 
+    # 修复：进程被容器重启杀掉时 daemon 线程不会走 finally → 锁与状态双双滞留，
+    # 页面会一直显示"正在重建"且按钮禁用，直到 TTL 过期。这里先做一次对账。
+    _st = rebuild_status()
+    if _st.get("status") == "running":
+        try:
+            _age = (datetime.now() - datetime.fromisoformat(_st["started_at"])).total_seconds()
+        except Exception:
+            _age = 1e9
+        if _age > float(c.get("rebuild_lock_minutes", 15)) * 60:
+            _write_state({"status": "failed",
+                          "finished_at": datetime.now().isoformat(timespec="seconds"),
+                          "error": "上次重建未正常结束（进程重启），已清理僵尸锁",
+                          "trigger": "reconcile"})
+            _lock_release()
+
     stale = baseline_staleness(baseline, current_round, cfg=c)
     if not force and not stale.get("stale"):
         return {"started": False, "reason": "fresh", "staleness": stale}
@@ -674,3 +695,4 @@ if __name__ == "__main__":
     n_ok = sum(1 for v in d["teams"].values() if v.get("available"))
     print(f"done: {n_ok}/{len(d['teams'])} teams with baseline "
           f"(window={d['window_matches']} core_rate={d['core_rate']} saved={d['saved']})")
+

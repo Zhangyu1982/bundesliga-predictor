@@ -25,7 +25,7 @@ def _parse_dt(s: str):
         return datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
     except Exception:
         return None
-from rules.iteration_rules import IterationRules
+from rules.iteration_rules import IterationRules, elo_params_from_bundle
 from data_stores.cache import Cache
 import trainer
 
@@ -33,7 +33,9 @@ import trainer
 class PredictionPipeline:
     def __init__(self):
         self._bundle = trainer.train()      # 训练产物（Elo/DC/GBM），P1 历史数据驱动
-        self.rules = IterationRules()
+        # R1 的"重校准前参数"取 bundle 里实际生效的标定值（K=20 / home_adv=60），
+        # 不能用 config 原值（15/50）——那两个已被网格搜索覆盖。
+        self.rules = IterationRules(elo_params=elo_params_from_bundle(self._bundle))
         self.cache = Cache()
         self.provider = resolve_provider()   # 自动选择：实时(token) 或 零密钥种子
         self.cross_elo = CrossElo(self._model_elo_map())
@@ -101,7 +103,8 @@ class PredictionPipeline:
         top2 = sorted(mat.items(), key=lambda kv: -kv[1])[:2]
         return {
             "fused": {"home_win": home_w, "draw": draw, "away_win": away_w},
-            "elo": {"home_win": win_elo, "draw": 1 - win_elo, "away_win": 1 - win_elo},
+            # 修复：跨赛事没有可靠的平局模型，不再伪造 draw=away 的假三元组
+            "elo": {"home_win": win_elo, "draw": None, "away_win": 1 - win_elo},
             "score_top2": [{"score": f"{i}:{j}", "prob": round(p, 3)} for (i, j), p in top2],
             "lam": {"home": round(lam_h, 2), "away": round(lam_a, 2)},
         }
@@ -183,7 +186,16 @@ class PredictionPipeline:
         lineup_info = {"available": False, "note": "未获取到本场官方首发（赛前约 60 分钟才公布）"}
         _base_lambda = float(getattr(self._bundle, "dc_mu_home", 1.5) or 1.5)
         if lineup and lineup.get("available") and competition == "BL1":
-            from data.baseline import load_baseline, fetch_team_roster, fetch_team_ids, roster_drift
+            # 修复：baseline 侧任一符号缺失（版本漂移）会让整批 9 场直接 ImportError，
+            # 再被 app 显示成"请求过载"。这里降级为"不做大名单校验"。
+            try:
+                from data.baseline import (load_baseline, fetch_team_roster,
+                                           fetch_team_ids, roster_drift)
+            except Exception:
+                load_baseline = lambda: {}                       # noqa: E731
+                fetch_team_roster = lambda *a, **k: {}           # noqa: E731
+                fetch_team_ids = lambda *a, **k: {}              # noqa: E731
+                roster_drift = lambda *a, **k: {"available": False}  # noqa: E731
             from lineup_shift import (starter_deviation, describe_shift, xg_equivalent,
                                       describe_newcomers)
             bl_teams = (load_baseline() or {}).get("teams", {}) or {}
@@ -226,8 +238,15 @@ class PredictionPipeline:
         cl_preceding_a = bool(f_away.get("cl_preceding"))
 
         # ---------- R3 国家队系数窗口（xG 折扣作用于 DC 本场概率） ----------
-        disc_h = self.rules.xg_discount(self._eng(home_code), is_first_round_after_fifa, 0, 0, match_id)
-        disc_a = self.rules.xg_discount(self._eng(away_code), is_first_round_after_fifa, 0, 0, match_id)
+        # 修复：原实现把 nt_minutes / travel_km 写死成 (0, 0)，永远达不到 180min / 5000km
+        # 的阈值 → R3 从上线起恒返回 0（config 里的 0.08~0.15 是摆设）。
+        # 现在从比赛数据读取；provider 没提供时仍为 0，但"有数据就会生效"。
+        nm_h = int(match.get("home_nt_minutes") or 0)
+        nm_a = int(match.get("away_nt_minutes") or 0)
+        km_h = int(match.get("home_travel_km") or 0)
+        km_a = int(match.get("away_travel_km") or 0)
+        disc_h = self.rules.xg_discount(self._eng(home_code), is_first_round_after_fifa, nm_h, km_h, match_id)
+        disc_a = self.rules.xg_discount(self._eng(away_code), is_first_round_after_fifa, nm_a, km_a, match_id)
         # 疲劳 xG 折扣并入（欧战/杯赛休息不足等）
         disc_h += fatigue_disc_h
         disc_a += fatigue_disc_a
@@ -310,8 +329,12 @@ class PredictionPipeline:
         # ---------- R4 分歧场次标注：Elo vs DC 方向不一致 → 降一档 ----------
         elo_dir = "home_win" if res["elo"]["home_win"] > 0.5 else "away_win"
         dc = res.get("dc", res.get("elo", res))   # 跨赛事模式无 dc → 回退 elo/fused
-        dc_dir = "home_win" if dc["home_win"] > dc["draw"] and dc["home_win"] > dc["away_win"] else \
-                 ("draw" if dc["draw"] >= dc["away_win"] else "away_win")
+        if dc.get("draw") is None:
+            # 跨赛事没有 DC 三向概率 → R4 无从判定"方向分歧"，直接跳过（别硬造 draw）
+            dc_dir = elo_dir
+        else:
+            dc_dir = "home_win" if dc["home_win"] > dc["draw"] and dc["home_win"] > dc["away_win"] else \
+                     ("draw" if dc["draw"] >= dc["away_win"] else "away_win")
         # 推荐方向 = 三项概率取最大（平局也必须是候选，不能只在家胜/客胜里二选一）
         pick_dir = max(("home_win", "draw", "away_win"), key=lambda k: probs[k])
         div = self.rules.mark_divergence(elo_dir, dc_dir, pick_dir, match_id,
@@ -409,7 +432,9 @@ class PredictionPipeline:
             "data_availability": "无伤病数据" if no_injury_data else "含伤病数据",
             "confirm_blocked": confirm_blocked,
             "model_breakdown": {"elo_home": round(res["elo"]["home_win"], 3),
-                                "elo_draw": round(res["elo"]["draw"], 3),
+                                # 跨赛事 elo 没有平局项 → 展示为 "—"（原来会 round(None) 崩）
+                                "elo_draw": (round(res["elo"]["draw"], 3)
+                                             if res["elo"].get("draw") is not None else "—"),
                                 "elo_away": round(res["elo"]["away_win"], 3),
                                 "gbm_trust": res.get("gbm_trust", 1.0),
                                 "dc_score_top2": [s["score"] for s in res["score_top2"]]},
@@ -430,6 +455,11 @@ class PredictionPipeline:
                 card["risk_note"] += "（本场未录入伤病，概率与初版一致）"
             else:
                 card["stage"] = "初版"
+        # 修复：确认版必须有复算结果。本场没有伤病数据时 confirm_probs 为 None，
+        # 原来仍标 [确认版]（概率其实是初版），现在统一回落为初版并写明原因。
+        if card["stage"] == "确认版" and confirm_probs is None:
+            card["stage"] = "初版"
+            card["risk_note"] += "（本场无伤病复算数据，等同初版）"
         return card
 
     # ---------------- 整轮预测（含无数据降级容错，验收条件 #4） ----------------
@@ -731,4 +761,5 @@ class PredictionPipeline:
             "prev_round_bias_summary": self.rules.prev_round_bias_summary(round_no),
             "uncalibrated_thresholds": uncalibrated_thresholds(),
         }
+
 
