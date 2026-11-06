@@ -545,14 +545,79 @@ if ss["stage"] == "确认版" and not realtime_injury:
     st.warning("⛔ **暂无赛前 48h 实时伤病数据，无法生成确认版。** "
                "请在上方手动录入伤病名单（方案 C），否则本次生成会被逐场降级为初版（卡片右上角会标 [初版] 并在下方给出拦截提示）。")
 
+# ---------- P5.2：常规主力库自动重建 + 手动刷新（主区常显，不放 expander 里） ----------
+try:
+    import config as _blcfg
+    from data.baseline import (load_baseline as _load_bl,
+                               baseline_staleness as _bl_stale,
+                               maybe_auto_rebuild as _bl_auto,
+                               rebuild_now as _bl_now,
+                               rebuild_status as _bl_status)
+    _bl = _load_bl() or {}
+    _rs = _bl_status() or {}
+    _bl_stale_info = _bl_stale(_bl, ss.get("round"))
+    _auto_on = bool(_blcfg.LINEUP_SHIFT.get("auto_rebuild", True))
+
+    if _rs.get("status") == "running":
+        st.info(f"🔄 **常规主力库正在后台重建**…（启动于 {_rs.get('started_at', '')}，约 1–3 分钟；"
+                "完成后刷新页面即生效，期间预测照旧用旧基线，不会失败）")
+    elif _rs.get("status") == "done":
+        st.caption(f"✅ 上次重建成功：{_rs.get('teams_ok', '?')} 队 · {_rs.get('updated_at', '')}"
+                   f"（{'手动' if _rs.get('trigger') == 'manual' else '自动'}）")
+    elif _rs.get("status") == "failed":
+        st.caption(f"⚠️ 上次重建未完成：{_rs.get('error', '未知原因')}（**已保留原基线**，不影响预测）")
+
+    # 陈旧检测：每个会话首次发现陈旧时，自动起一个后台线程（只试一次，避免反复触发）
+    if _bl_stale_info.get("stale"):
+        if not ss.get("_bl_auto_tried"):
+            ss["_bl_auto_tried"] = True
+            _res = _bl_auto(ss.get("round")) if _auto_on else {"started": False, "reason": "disabled"}
+            if _res.get("started"):
+                st.info(f"🔄 检测到基线已陈旧（{_bl_stale_info.get('reason')}），"
+                        "已在后台自动重建，可继续正常预测。")
+            elif _res.get("reason") == "busy":
+                st.caption("另有重建任务正在运行，等它结束即可。")
+            elif _res.get("reason") == "disabled":
+                st.warning(f"⏳ 常规主力库已陈旧（{_bl_stale_info.get('reason')}）。"
+                           "自动重建已关闭，请点下方「🔄 更新主力基线」按钮。")
+        elif _rs.get("status") not in ("running", "done"):
+            st.warning(f"⏳ 常规主力库已陈旧（{_bl_stale_info.get('reason')}），"
+                       "建议点下方「🔄 更新主力基线」重建一次。")
+
+    _c1, _c2 = st.columns([1, 3])
+    with _c1:
+        _bl_do = st.button("🔄 更新主力基线", key="btn_bl_rebuild",
+                           disabled=bool(_rs.get("status") == "running"),
+                           help=f"重新抓取近 {_bl.get('window_matches', '?')} 场首发 + 18 队当前大名单，"
+                                "重建常规主力库（约 1–3 分钟）。重建失败会保留旧基线。")
+    with _c2:
+        st.caption(f"常规主力库：近 {_bl.get('window_matches', '?')} 场 · 核心阈值 "
+                   f"{_bl.get('core_rate', '?')}（≈ 6 场里首发 ≥5 场）· 更新于 {_bl.get('updated_at', '—')}"
+                   f" · 记录轮次 {_bl.get('built_round', '—')}"
+                   "　｜　重建结果写入 `data/baseline_xi.json`；公网容器重启会回退到仓库版本，"
+                   "需本地重建后 push 才永久生效")
+    if _bl_do:
+        _ph = st.empty()
+        with st.spinner("正在重建常规主力库（约 1–3 分钟）……"):
+            _r = _bl_now(ss.get("round"), progress=lambda m: _ph.caption(m))
+        if _r.get("ok"):
+            _ph.success("✅ " + _r.get("message", "已更新"))
+            st.rerun()
+        else:
+            _ph.error("⚠️ " + _r.get("message", "重建失败（已保留旧基线）"))
+except Exception as _e:
+    st.caption(f"常规主力库面板异常（不影响预测）：{type(_e).__name__}: {_e}")
+
 # ---------- P5：赛前 1 小时终极刷新 ----------
 with st.expander("⚡ 赛前 1 小时终极刷新（用官方首发反推常规主力缺失）", expanded=False):
     st.markdown(
         "**原理**：ESPN 没有结构化伤病接口，但 `summary` 里有逐人首发/替补名单（赛前约 60 分钟公布）。"
-        "系统把「本场 11 人首发」与「近 8 场统计出的常规主力库」比对：\n\n"
+        "系统把「本场 11 人首发」与「近 6 场统计出的常规主力库」比对：\n\n"
         "- 常规主力在首发 → 战力满分\n"
         "- 常规主力在替补席 → 扣一半（下半场能上，含超级替补价值）\n"
         "- 常规主力完全不在名单 → 全额扣（约 0.10 DC 折扣/人，按历史首发率加权）\n\n"
+        "**核心口径**：近 6 场首发率 ≥ 0.7（等价「6 场里至少首发 5 场」）才算核心，"
+        "正常战术轮换不进核心集合、不参与扣分。\n\n"
         "**转会窗容错**：基线是静态快照，卖走的人会永远留在库里。所以扣分前先用 ESPN 当前大名单校验——"
         "已离队的直接剔出、不扣分；本场首发但基线里从未出现过的人标为「新面孔首发」（新援/奇兵），只提示不加分。\n\n"
         "把上面阶段切到 **⚡ 终极版** 后点「生成预测」即触发；抓不到首发会自动回退，不会编造。")
@@ -575,11 +640,11 @@ with st.expander("⚡ 赛前 1 小时终极刷新（用官方首发反推常规�
                 _age = (_dt.now() - _dt.strptime(_bl.get("updated_at"), "%Y-%m-%d %H:%M")).total_seconds() / 3600
                 if _age > _grace:
                     st.warning(f"⏳ 常规主力库已 {_age/24:.1f} 天未重建（超过 {_grace/24:.0f} 天宽限），"
-                               "转会窗期间阵容可能已变，建议运行 `python -m data.baseline 8` 刷新。")
+                               "转会窗期间阵容可能已变 —— 点上方的「🔄 更新主力基线」按钮即可（不必敲命令行）。")
             except Exception:
                 pass
         else:
-            st.caption("常规主力库尚未构建：运行 `python -m data.baseline 8`（约 1–2 分钟）生成后即可使用。")
+            st.caption("常规主力库尚未构建：点上方的「🔄 更新主力基线」按钮生成（约 1–3 分钟）后即可使用。")
     except Exception:
         st.caption("常规主力库读取失败（不影响预测，只是首发反推不生效）")
 
@@ -761,7 +826,7 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
                 _dr = [d for d in (lu.get("roster_drift") or {}).values() if d and d.get("drift")]
                 if _dr:
                     st.warning("♻️ **该队阵容变动较大**（基线 XI 已离队比例过高），"
-                               "建议重建常规主力库：`python -m data.baseline 8`，否则新援不会被识别为常规主力。")
+                               "建议点上方的「🔄 更新主力基线」重建一次，否则新援不会被识别为常规主力。")
             st.markdown(f"**胜/平/负**　主胜 `{p['home_win']}` · 平 `{p['draw']}` · 客胜 `{p['away_win']}`")
             if ss["competition"] == "CL":
                 st.caption("欧冠跨赛事预测：德甲队用模型 Elo，其他联赛对手用精选豪门/联赛平均 Elo 兜底（未实时校准）。")

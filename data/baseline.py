@@ -12,7 +12,9 @@ P5 · 常规主力库（Baseline XI）
   - 只统计**该队实际出场且首发名单已公布**的场次（含联赛+杯赛，ESPN 同一 league code 内）
   - 首发率 rate = 首发次数 / 参与统计的场次数，取值 0–1
   - baseline XI = 门将位取首发最多的 1 人 + 其余按 rate 取 10 人
-  - 常规主力集合 core = rate >= cfg.core_rate（默认 0.6）
+  - 常规主力集合 core = rate >= cfg.core_rate（**2026-11-06 收紧为 0.7 + 6 场窗口**：
+    等价于「6 场里至少首发 5 场」。0.7 只是阈值表达，4/6=0.667 达不到，故不会把
+    正常战术轮换算成核心，避免轮换球员被当成"伤病缺阵"扣分）
 
 P5.1 · 转会窗容错
 ----------------
@@ -24,11 +26,22 @@ P5.1 · 转会窗容错
 大名单接口实测：`/ger.1/teams/{id}/roster` → 200，扁平球员数组（id/fullName/position/jersey/age），
 athlete id 与 summary 里的 `athlete.id` 同一套（BAY/HSV/DOR 各 11/11 全匹配）。
 （`transactions`/`seasons` 只是 `.pvt` 内部 $ref 链接，取不到转会明细，故新援识别只能用首发历史代理。）
+
+P5.2 · 基线自动重建
+------------------
+静态快照必须定期刷新，否则 3 轮后就和当前阵容脱节。本模块提供：
+  - `baseline_staleness()`：判定是否该重建（轮次落后 >= rebuild_round_gap，或距今 >= rebuild_max_age_days）；
+  - `maybe_auto_rebuild()`：需要时起**后台守护线程**静默重建（磁盘锁防并发，状态写状态文件）；
+  - `rebuild_now()`：同步重建（UI 按钮用，带进度回调）；
+  - `rebuild_status()`：读状态文件，供 UI 显示"正在重建/已完成/失败"。
+**安全约定**：重建结果可用队数 < `rebuild_min_teams` 时**绝不覆盖**已有 JSON（网络故障/接口挂掉
+时旧基线仍可用于预测）；所有写入都是「临时文件 + os.replace」原子替换，进程中途退出不会留下半个文件。
 """
 from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -40,6 +53,8 @@ from config import LINEUP_SHIFT as LINEUP_CFG
 DATA_DIR = os.path.dirname(os.path.abspath(__file__))
 BASELINE_FILE = os.path.join(DATA_DIR, "baseline_xi.json")
 ROSTER_CACHE = os.path.join(DATA_DIR, "roster_cache.json")
+REBUILD_LOCK = os.path.join(DATA_DIR, ".baseline_rebuild.lock")
+REBUILD_STATE = os.path.join(DATA_DIR, ".baseline_rebuild.json")
 
 # 项目 code -> BL1 18 队（用于确认 baseline 覆盖到哪些队）
 BL1_CODES = ["BAY", "BMG", "DOR", "ELV", "FCA", "FCU", "HSV", "KOE", "LEV",
@@ -54,13 +69,38 @@ def load_baseline() -> dict:
         return {}
 
 
-def save_baseline(data: dict) -> None:
+def _write_json_atomic(path: str, data: dict) -> bool:
+    """原子写：先写同目录临时文件，再 os.replace，避免写出半个 JSON。"""
     try:
-        os.makedirs(os.path.dirname(BASELINE_FILE), exist_ok=True)
-        with open(BASELINE_FILE, "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.tmp.{os.getpid()}.{int(time.time() * 1000)}"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, path)
+        return True
     except Exception:
-        pass
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        return False
+
+
+def save_baseline(data: dict, guard: bool = True) -> bool:
+    """落盘基线。guard=True 时，可用队数不足 `rebuild_min_teams` 的结果**拒绝写入**。
+
+    失败的重建绝不能覆盖一份还能用的旧基线 —— 这是自动重建最危险的副作用，
+    所以默认开着守卫。返回是否真正写入。
+    """
+    if guard:
+        teams = (data or {}).get("teams") or {}
+        n_ok = sum(1 for v in teams.values() if v.get("available"))
+        need = int((LINEUP_CFG or {}).get("rebuild_min_teams", 9))
+        if n_ok < need:
+            print(f"[baseline] 拒绝保存：可用队数 {n_ok} < 阈值 {need}，保留旧基线")
+            return False
+    return _write_json_atomic(BASELINE_FILE, data)
 
 
 def fetch_team_ids(league_key: str = "BL1", use_cache: bool = True) -> dict[str, str]:
@@ -289,13 +329,31 @@ def _pick_xi(players: dict) -> tuple[list[dict], list[dict]]:
     return xi, rows
 
 
-def build_baseline(window_matches: int = 8, league_key: str = "BL1",
-                   codes: list[str] | None = None, core_rate: float = 0.6,
-                   verbose: bool = False) -> dict:
+def select_core(rows: list[dict], core_rate: float) -> list[dict]:
+    """挑"核心"：rate >= core_rate 且至少首发过 1 场。
+
+    6 场窗口 + 0.7 ⇒ 只有首发 5–6 场的人入选（4/6=0.667 < 0.7）。
+    这是"绝对雷打不动的核心"口径，正常轮换（3–4 场）不会进来。
+    """
+    return [r for r in rows if r.get("starts", 0) > 0 and r.get("rate", 0) >= core_rate]
+
+
+def build_baseline(window_matches: int | None = None, league_key: str = "BL1",
+                   codes: list[str] | None = None, core_rate: float | None = None,
+                   verbose: bool = False, round_hint: int | None = None,
+                   save: bool = True) -> dict:
     """构建/刷新常规主力库并落盘。
 
-    一次构建约 18 次 schedule + 若干次 summary 请求（summary 有本地缓存，重复跑很快）。
+    window_matches / core_rate 传 None 时取 `config.LINEUP_SHIFT` 的值（6 场 / 0.7）。
+    round_hint：调用方已知的"当前轮次"（app 里就是用户选的轮次），写入产物供
+    `baseline_staleness()` 判"落后几轮"；命令行构建拿不到时可为 None，此时只按日期判陈旧。
+    save=True 时会走 `save_baseline()` 的守卫（可用队数不足则拒绝覆盖旧基线）。
     """
+    if window_matches is None:
+        window_matches = int((LINEUP_CFG or {}).get("window_matches", 6))
+    if core_rate is None:
+        core_rate = float((LINEUP_CFG or {}).get("core_rate", 0.7))
+
     team_ids = fetch_team_ids(league_key)
     target_codes = codes or [c for c in BL1_CODES if c in team_ids]
 
@@ -306,7 +364,8 @@ def build_baseline(window_matches: int = 8, league_key: str = "BL1",
         if not tid:
             continue
         evs = [e for e in fetch_team_events(tid, league_key) if e.get("event_id")]
-        team_events[code] = [e["event_id"] for e in evs[:window_matches + 4]]
+        # 多留几场余量：有些场次首发没公布/被跳过，取 window+6 保证够数
+        team_events[code] = [e["event_id"] for e in evs[:window_matches + 6]]
 
     all_events = sorted({eid for evs in team_events.values() for eid in evs})
     if verbose:
@@ -346,7 +405,7 @@ def build_baseline(window_matches: int = 8, league_key: str = "BL1",
             continue
         agg = _aggregate(code, rows)
         xi, all_rows = _pick_xi(agg["players"])
-        core = [r for r in all_rows if r["rate"] >= core_rate and r["starts"] > 0]
+        core = select_core(all_rows, core_rate)
         xi_dicts = [{"name": r["name"], "id": r.get("id", ""), "pos": r.get("pos", ""),
                      "rate": r["rate"], "starts": r["starts"]} for r in xi]
         core_dicts = [{"name": r["name"], "id": r.get("id", ""), "rate": r["rate"],
@@ -384,19 +443,234 @@ def build_baseline(window_matches: int = 8, league_key: str = "BL1",
 
     data = {
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "updated_at_iso": datetime.now().isoformat(timespec="seconds"),
         "league": LINEUP_LEAGUES.get(league_key, ""),
         "window_matches": window_matches,
         "core_rate": core_rate,
+        "built_round": round_hint,
         "roster_checked": True,
         "teams": teams_out,
     }
-    save_baseline(data)
+    data["saved"] = save_baseline(data) if save else False
     return data
+
+
+# ============ P5.2 · 基线自动重建 ============
+
+def baseline_staleness(baseline: dict | None = None, current_round: int | None = None,
+                       cfg: dict | None = None) -> dict:
+    """判定基线是否陈旧，返回 {stale, reason, age_days, round_gap, ...}。
+
+    两个判据（满足任一即陈旧）：
+      1. 记录的 built_round 落后当前轮次 >= rebuild_round_gap（3 轮）；
+      2. updated_at 距今 >= rebuild_max_age_days（14 天）。
+    built_round 缺失（命令行构建）/ current_round 缺失时只走日期判据 —— 宁可少重建一次，
+    也不能因为"不知道轮次"就每次启动都重建。
+    """
+    c = cfg or LINEUP_CFG or {}
+    bl = baseline if baseline is not None else load_baseline()
+    gap_need = int(c.get("rebuild_round_gap", 3))
+    max_days = float(c.get("rebuild_max_age_days", 14))
+
+    out = {"stale": False, "reason": "", "age_days": None, "round_gap": None,
+           "built_round": (bl or {}).get("built_round"),
+           "window_matches": (bl or {}).get("window_matches"),
+           "core_rate": (bl or {}).get("core_rate")}
+
+    if not (bl or {}).get("teams"):
+        out.update({"stale": True, "reason": "no_baseline"})
+        return out
+
+    # 天数：优先 ISO 时间戳（无时区歧义），退化到旧的 %Y-%m-%d %H:%M
+    age_days = None
+    for key in ("updated_at_iso", "updated_at"):
+        raw = (bl or {}).get(key)
+        if not raw:
+            continue
+        try:
+            if key == "updated_at_iso":
+                age_days = (datetime.now() - datetime.fromisoformat(raw)).total_seconds() / 86400
+            else:
+                age_days = (datetime.now() - datetime.strptime(raw, "%Y-%m-%d %H:%M")).total_seconds() / 86400
+            break
+        except Exception:
+            continue
+    out["age_days"] = round(age_days, 2) if age_days is not None else None
+
+    gap = None
+    if current_round and out["built_round"]:
+        try:
+            gap = int(current_round) - int(out["built_round"])
+        except Exception:
+            gap = None
+    out["round_gap"] = gap
+
+    reasons = []
+    if gap is not None and gap >= gap_need:
+        reasons.append(f"落后 {gap} 轮（阈值 {gap_need}）")
+    if age_days is not None and age_days >= max_days:
+        reasons.append(f"已 {age_days:.0f} 天未更新（阈值 {max_days:.0f} 天）")
+    if reasons:
+        out.update({"stale": True, "reason": "；".join(reasons)})
+    return out
+
+
+def _lock_acquire(ttl_minutes: float = 15) -> bool:
+    """磁盘互斥锁（O_EXCL 原子创建）。超过 TTL 的僵尸锁自动清掉。"""
+    try:
+        if os.path.exists(REBUILD_LOCK):
+            age_min = (time.time() - os.path.getmtime(REBUILD_LOCK)) / 60
+            if age_min > ttl_minutes:
+                os.remove(REBUILD_LOCK)
+            else:
+                return False
+        fd = os.open(REBUILD_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, f"{os.getpid()} {datetime.now().isoformat(timespec='seconds')}".encode())
+        os.close(fd)
+        return True
+    except Exception:
+        return False
+
+
+def _lock_release() -> None:
+    try:
+        if os.path.exists(REBUILD_LOCK):
+            os.remove(REBUILD_LOCK)
+    except Exception:
+        pass
+
+
+def _write_state(state: dict) -> None:
+    _write_json_atomic(REBUILD_STATE, state)
+
+
+def rebuild_status() -> dict:
+    """读重建状态文件：{status: idle|running|done|failed, ...}"""
+    try:
+        with open(REBUILD_STATE, "r", encoding="utf-8") as f:
+            st = json.load(f)
+        if isinstance(st, dict):
+            return st
+    except Exception:
+        pass
+    return {"status": "idle"}
+
+
+def _rebuild_worker(round_hint=None, window_matches=None, core_rate=None,
+                    league_key="BL1") -> dict:
+    """后台线程主体：重建 → 守卫落盘 → 写状态。任何异常都写 failed，不覆盖旧基线。"""
+    started = datetime.now()
+    _write_state({"status": "running", "started_at": started.isoformat(timespec="seconds"),
+                  "round": round_hint})
+    try:
+        data = build_baseline(window_matches=window_matches, league_key=league_key,
+                              core_rate=core_rate, round_hint=round_hint, save=True)
+        n_ok = sum(1 for v in (data.get("teams") or {}).values() if v.get("available"))
+        ok = bool(data.get("saved"))
+        _write_state({
+            "status": "done" if ok else "failed",
+            "started_at": started.isoformat(timespec="seconds"),
+            "finished_at": datetime.now().isoformat(timespec="seconds"),
+            "round": round_hint, "teams_ok": n_ok,
+            "updated_at": data.get("updated_at", ""),
+            "error": "" if ok else f"可用队数 {n_ok} 不足，已保留旧基线",
+            "trigger": "auto",
+        })
+        return data
+    except Exception as e:
+        _write_state({"status": "failed", "started_at": started.isoformat(timespec="seconds"),
+                      "finished_at": datetime.now().isoformat(timespec="seconds"),
+                      "round": round_hint, "error": f"{type(e).__name__}: {e}",
+                      "trigger": "auto"})
+        return {}
+    finally:
+        _lock_release()
+
+
+def maybe_auto_rebuild(current_round: int | None = None, league_key: str = "BL1",
+                       window_matches: int | None = None, core_rate: float | None = None,
+                       force: bool = False, baseline: dict | None = None) -> dict:
+    """按需在**后台线程**静默重建基线。返回 {started, reason, ...}，不会阻塞调用方。
+
+    reason: disabled | busy（已有重建在跑）| fresh（还没到阈值）| started | no_thread
+    """
+    c = LINEUP_CFG or {}
+    if not force and c.get("auto_rebuild") is False:
+        return {"started": False, "reason": "disabled"}
+
+    stale = baseline_staleness(baseline, current_round, cfg=c)
+    if not force and not stale.get("stale"):
+        return {"started": False, "reason": "fresh", "staleness": stale}
+
+    if not _lock_acquire(float(c.get("rebuild_lock_minutes", 15))):
+        return {"started": False, "reason": "busy", "staleness": stale}
+
+    th = threading.Thread(
+        target=_rebuild_worker,
+        kwargs={"round_hint": current_round, "window_matches": window_matches,
+                "core_rate": core_rate, "league_key": league_key},
+        daemon=True, name="baseline-rebuild")
+    try:
+        th.start()
+    except Exception as e:
+        _lock_release()
+        return {"started": False, "reason": "no_thread", "error": str(e), "staleness": stale}
+    return {"started": True, "reason": "started", "staleness": stale}
+
+
+def rebuild_now(current_round: int | None = None, league_key: str = "BL1",
+                window_matches: int | None = None, core_rate: float | None = None,
+                progress=None) -> dict:
+    """同步重建（UI 按钮用）。progress 是可调用对象，接受一段文案字符串。"""
+    c = LINEUP_CFG or {}
+    if not _lock_acquire(float(c.get("rebuild_lock_minutes", 15))):
+        return {"ok": False, "reason": "busy",
+                "message": "已有重建任务在跑，请等它结束（约 1–3 分钟）"}
+
+    def _p(msg):
+        if progress:
+            try:
+                progress(msg)
+            except Exception:
+                pass
+
+    try:
+        _p("正在读取 18 队赛程与历史首发……")
+        data = build_baseline(window_matches=window_matches, league_key=league_key,
+                              core_rate=core_rate, round_hint=current_round, save=True)
+        n_ok = sum(1 for v in (data.get("teams") or {}).values() if v.get("available"))
+        ok = bool(data.get("saved"))
+        state = {"status": "done" if ok else "failed",
+                 "started_at": datetime.now().isoformat(timespec="seconds"),
+                 "finished_at": datetime.now().isoformat(timespec="seconds"),
+                 "round": current_round, "teams_ok": n_ok,
+                 "updated_at": data.get("updated_at", ""),
+                 "error": "" if ok else f"可用队数 {n_ok} 不足，已保留旧基线",
+                 "trigger": "manual"}
+        _write_state(state)
+        if ok:
+            msg = (f"已更新：{n_ok} 队可用 · 近 {data.get('window_matches')} 场 · "
+                   f"核心阈值 {data.get('core_rate')} · {data.get('updated_at')}")
+        else:
+            msg = f"重建结果只有 {n_ok} 队可用（低于阈值），已保留旧基线未覆盖"
+        return {"ok": ok, "teams_ok": n_ok, "message": msg, "data": data}
+    except Exception as e:
+        _write_state({"status": "failed", "finished_at": datetime.now().isoformat(timespec="seconds"),
+                      "error": f"{type(e).__name__}: {e}", "trigger": "manual"})
+        return {"ok": False, "reason": "error", "message": f"重建失败：{type(e).__name__}: {e}"}
+    finally:
+        _lock_release()
 
 
 if __name__ == "__main__":
     import sys
-    w = int(sys.argv[1]) if len(sys.argv) > 1 else 8
-    d = build_baseline(window_matches=w, verbose=True)
+    argv = [a for a in sys.argv[1:]]
+    w = int(argv[0]) if argv and argv[0].isdigit() else None
+    rnd = None
+    for i, a in enumerate(argv):
+        if a in ("--round", "-r") and i + 1 < len(argv) and argv[i + 1].isdigit():
+            rnd = int(argv[i + 1])
+    d = build_baseline(window_matches=w, round_hint=rnd, verbose=True)
     n_ok = sum(1 for v in d["teams"].values() if v.get("available"))
-    print(f"done: {n_ok}/{len(d['teams'])} teams with baseline")
+    print(f"done: {n_ok}/{len(d['teams'])} teams with baseline "
+          f"(window={d['window_matches']} core_rate={d['core_rate']} saved={d['saved']})")

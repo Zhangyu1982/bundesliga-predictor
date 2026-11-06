@@ -29,3 +29,7 @@ data/scoreboard_p5_cache.json
 
 # P5.1 大名单缓存（运行时拉取，TTL 24h；丢失后会自动重拉，不影响结果正确性）
 data/roster_cache.json
+
+# P5.2 基线自动重建的互斥锁与状态文件（运行时生成，勿入库）
+data/.baseline_rebuild.lock
+data/.baseline_rebuild.json
