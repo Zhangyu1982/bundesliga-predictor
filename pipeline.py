@@ -27,6 +27,7 @@ def _parse_dt(s: str):
         return None
 from rules.iteration_rules import IterationRules, elo_params_from_bundle
 from data_stores.cache import Cache
+from data.timeutil import fmt_local  # 时间口径：存 UTC，展示转北京时间
 import trainer
 
 
@@ -57,7 +58,7 @@ class PredictionPipeline:
         """验收条件 #1：数据最后拉取时间 + 缓存标注。"""
         f = meta.get("freshness", {})
         cached = f.get("cached", False)
-        label = f"数据最后拉取时间：{f.get('fetched_at','—')}"
+        label = f"数据最后拉取时间：{fmt_local(f.get('fetched_at'))}"
         if cached:
             label += "（缓存）"
         return label
@@ -402,9 +403,22 @@ class PredictionPipeline:
         # P4·优先级二①：运气回归（触底反弹）标签与 gap
         luck_info = {"home_gap": lu_h.get("gap"), "away_gap": lu_a.get("gap"),
                      "home_rebound": rebound_h, "away_rebound": rebound_a}
+        # 可选提示：某队在这套 DC 里没有任何历史参数（升班马/欧战新面孔）→ 走的是
+        # 「联赛平均」默认值。归一化后 1.0 确实等于平均队，但卡片上仍要说清楚，
+        # 免得被当成"真实强弱"读。
+        try:
+            _dc_keys = getattr(self._bundle, "dc_attack", {}) or {}
+        except Exception:
+            _dc_keys = {}
+        no_history_teams = []
+        for _code, _zh in ((match.get("home_code"), home), (match.get("away_code"), away)):
+            if _code and _dc_keys and self._eng(_code) not in _dc_keys:
+                no_history_teams.append(_zh)
+
         card = {
             "match_id": match_id, "competition": competition,
             "home_team": home, "away_team": away,
+            "no_history_teams": no_history_teams,
             "kickoff": match.get("kickoff", ""), "stage": stage,
             "last_updated": match.get("last_updated", ""),
             "standings": match.get("standings"),

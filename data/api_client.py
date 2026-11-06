@@ -22,6 +22,7 @@ from config import DATA_SOURCES, LEAGUE, SEASON
 from data.seed_data import get_round_fixtures, seed_freshness, TEAMS
 from data.historical_data import load_seasons, team_last_state, CODE2ENG
 from data_stores.cache import Cache
+from data.timeutil import utc_now_iso  # 时区口径：存 UTC 带标记，展示转本地（见 data/timeutil.py）
 
 
 # ---------- P2 队名归一化映射层：football-data.org 真实队名 → 种子 code ----------
@@ -109,7 +110,7 @@ class _CachedProvider(_BaseProvider):
         self.cache.update_quota_from_headers(resource, r.headers)  # 动态识别剩余额度
         payload = r.json()
         self._set_cached(resource, payload)
-        self._fetched_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        self._fetched_at = utc_now_iso()   # UTC 带 +00:00 标记，展示时转北京时间
         return payload | {"cached": False}
 
 
@@ -223,7 +224,7 @@ class LiveFootballDataProvider(_CachedProvider):
                 "status": m.get("status", ""),
                 "score": m.get("score", {}),
                 "stage": "初版",
-                "last_updated": time.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+                "last_updated": utc_now_iso(),
                 "standings": st,
                 "form_last3": {"home": form_cache.get(home_code, ["—"]),
                                "away": form_cache.get(away_code, ["—"])},
@@ -252,7 +253,7 @@ class LiveFootballDataProvider(_CachedProvider):
         return get_round_fixtures(round_no)
 
     def freshness(self) -> dict:
-        return {"fetched_at": self._fetched_at or time.strftime("%Y-%m-%d %H:%M:%S"),
+        return {"fetched_at": self._fetched_at or utc_now_iso(),
                 "source": self.name, "cached": self._fetched_at is None}
 
 
@@ -331,12 +332,12 @@ class ApiFootballProvider(_CachedProvider):
                 "home_team": home.get("name", ""), "away_team": away.get("name", ""),
                 "kickoff": f.get("fixture", {}).get("date", ""),
                 "injuries": {"home_key_out": [], "away_key_out": []},
-                "last_updated": time.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+                "last_updated": utc_now_iso(),
             })
         return out
 
     def freshness(self) -> dict:
-        return {"fetched_at": self._fetched_at or time.strftime("%Y-%m-%d %H:%M:%S"),
+        return {"fetched_at": self._fetched_at or utc_now_iso(),
                 "source": self.name, "cached": self._fetched_at is None}
 
 

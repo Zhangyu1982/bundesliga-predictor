@@ -294,6 +294,27 @@ def build_feature_vector(bundle: ModelBundle, home: str, away: str) -> dict:
     }
 
 
+def _normalize_dc(b: ModelBundle) -> ModelBundle:
+    """把 DC 的 attack/defence 归一到「平均队 = 1.0」，修默认尺度的语义错位。
+
+    背景：λ = mu_home * attack[主] * defence[客]。拟合出来的 attack 均值约 0.614、
+    defence 均值约 1.591，而 `dc_probs` 对**历史里没出现过的球队**（升班马、欧战对手）
+    走 `.get(team, 1.0)` 的默认值。于是"默认值 1.0"并不等于"联赛平均"，而是等于
+    "攻强守弱"——拜仁(1.26/1.51) 主场打升班马会算出 λ≈2.19 vs 2.20，五五开。
+
+    修法：attack 除以自身均值、defence 乘同一个数，成对做所以 attack*defence 不变——
+    λ、比分分布、所有已见球队的预测**完全不变**，只是把 gauge 挪到"1.0 = 平均"。
+    幂等：归一后再调用一次 ma≈1.0，结果不变。
+    """
+    if not getattr(b, "dc_attack", None):
+        return b
+    ma = sum(b.dc_attack.values()) / len(b.dc_attack)
+    if ma > 0:
+        b.dc_attack = {k: v / ma for k, v in b.dc_attack.items()}
+        b.dc_defence = {k: v * ma for k, v in b.dc_defence.items()}
+    return b
+
+
 def train(force: bool = False, verbose: bool = True) -> ModelBundle:
     """完整训练并缓存。"""
     if not force and os.path.exists(ARTIFACT_PATH):
@@ -303,7 +324,9 @@ def train(force: bool = False, verbose: bool = True) -> ModelBundle:
             with open(ARTIFACT_PATH, "rb") as f:
                 _b = pickle.load(f)
             if getattr(_b, "version", 0) == _BUNDLE_VERSION:
-                return _b
+                # 缓存产物也要归一：线上读的是 pickle，不是新训练结果，
+                # 不在这里调等于"改了没上线"。
+                return _normalize_dc(_b)
             print("[trainer] 旧 artifact 版本不符，重新训练")
         except Exception as _e:
             print(f"[trainer] artifact 读取失败（{type(_e).__name__}），重新训练")
@@ -336,6 +359,9 @@ def train(force: bool = False, verbose: bool = True) -> ModelBundle:
     gb = train_gbm(df_e)
     bundle.gbm_xgb, bundle.gbm_lgb = gb.gbm_xgb, gb.gbm_lgb
     bundle.df = df_e
+
+    # 新训练完也归一（与缓存路径同一口径），落盘的就是归一后的尺度
+    bundle = _normalize_dc(bundle)
 
     os.makedirs(os.path.dirname(ARTIFACT_PATH), exist_ok=True)
     with open(ARTIFACT_PATH, "wb") as f:

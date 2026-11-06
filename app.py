@@ -11,6 +11,7 @@ import streamlit as st
 from pipeline import PredictionPipeline
 from data.injury_fetch import (fetch_all_candidates, _live_fetch_candidates,
                                load_backup, save_backup)
+from data.timeutil import fmt_local, age_hours  # 时间口径：存 UTC，展示转北京时间
 
 DISCLAIMER = ("本系统输出为概率推演，不构成投注建议。比分 Top2 是分布最集中区域，不代表确定结果。"
               "伤病与国家队负荷在赛前 48 小时仍可能显著变动，初版与确认版之间的差异是系统的设计特性，不是缺陷。")
@@ -229,7 +230,7 @@ st.caption(DISCLAIMER)
 # ---------- 验收条件 #1：数据时效 + 缓存标注 ----------
 freshness = pipe.provider.freshness()
 cached = freshness.get("cached", False)
-label = f"数据最后拉取时间：{freshness.get('fetched_at','—')}"
+label = f"数据最后拉取时间：{fmt_local(freshness.get('fetched_at'))}"
 if cached:
     label += "（缓存）"
 st.markdown(f"🕓 **{label}**　·　来源：{freshness.get('source','—')}")
@@ -598,7 +599,8 @@ try:
                                 "重建常规主力库（约 1–3 分钟）。重建失败会保留旧基线。")
     with _c2:
         st.caption(f"常规主力库：近 {_bl.get('window_matches', '?')} 场 · 核心阈值 "
-                   f"{_bl.get('core_rate', '?')}（≈ 6 场里首发 ≥5 场）· 更新于 {_bl.get('updated_at', '—')}"
+                   f"{_bl.get('core_rate', '?')}（≈ 6 场里首发 ≥5 场）· 更新于 "
+                   f"{fmt_local(_bl.get('updated_at'), fmt='%Y-%m-%d %H:%M')}"
                    f" · 记录轮次 {_bl.get('built_round', '—')}"
                    "　｜　重建结果写入 `data/baseline_xi.json`；公网容器重启会回退到仓库版本，"
                    "需本地重建后 push 才永久生效")
@@ -636,15 +638,14 @@ with st.expander("⚡ 赛前 1 小时终极刷新（用官方首发反推常规�
             _checked = sum(1 for v in _bl["teams"].values()
                            if ((v.get("roster") or {}).get("checked") == "ok"))
             st.caption(f"常规主力库：{_ok}/{len(_bl['teams'])} 队可用 · 近 {_bl.get('window_matches')} 场统计 · "
-                       f"更新于 {_bl.get('updated_at')} · 大名单已校验 {_checked} 队"
+                       f"更新于 {fmt_local(_bl.get('updated_at'), fmt='%Y-%m-%d %H:%M')} · 大名单已校验 {_checked} 队"
                        "（样本不足的队会回退为不扣分）")
             # 快照时效提醒：超过宽限期提示重建（转会窗期间尤其重要）
             try:
-                from datetime import datetime as _dt
                 import config as _cfg
                 _grace = float(_cfg.LINEUP_SHIFT.get("roster_ttl_grace_hours", 72))
-                _age = (_dt.now() - _dt.strptime(_bl.get("updated_at"), "%Y-%m-%d %H:%M")).total_seconds() / 3600
-                if _age > _grace:
+                _age = age_hours(_bl.get("updated_at"))
+                if _age is not None and _age > _grace:
                     st.warning(f"⏳ 常规主力库已 {_age/24:.1f} 天未重建（超过 {_grace/24:.0f} 天宽限），"
                                "转会窗期间阵容可能已变 —— 点上方的「🔄 更新主力基线」按钮即可（不必敲命令行）。")
             except Exception:
@@ -720,6 +721,9 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
                 st.progress(p["home_win"], text=f"主胜 {p['home_win']:.0%}")
                 st.progress(p["draw"], text=f"平局 {p['draw']:.0%}")
                 st.progress(p["away_win"], text=f"客胜 {p['away_win']:.0%}")
+                if c.get("no_history_teams"):
+                    st.caption("⚠️ " + "、".join(c["no_history_teams"])
+                               + " 在模型里没有历史参数，按联赛平均建模（不代表真实强弱）")
         st.caption("胜/平/负为概率，推荐取三者概率最高的一项（平局也参与比较）；最可能比分取 Top1（分布最集中区域），与推荐方向可能不同。点开下方卡片可看伤病/解释等细节。")
 
     # 确认版被拦截的整体提示

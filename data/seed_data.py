@@ -11,6 +11,8 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 
+from data.timeutil import utc_now_iso  # 时区口径：存 UTC 带标记，展示转本地
+
 # 队伍：code -> 中文名
 TEAMS = {
     "BAY": "拜仁慕尼黑", "LEV": "勒沃库森", "DOR": "多特蒙德", "RBL": "莱比锡红牛",
@@ -121,7 +123,8 @@ def _match(home: str, away: str, kickoff: str, round_no: int) -> dict:
         "home_code": home, "away_code": away,
         "kickoff": kickoff,
         "stage": "初版",
-        "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+        # 修复：原来是 utcnow 的字符串却硬标 +08:00（差 8 小时的根因之一）
+        "last_updated": utc_now_iso(),
         "standings": {"home": {"rank": h_rank, "pts": h_pts},
                       "away": {"rank": a_rank, "pts": a_pts}},
         "form_last3": {"home": FORM3[home], "away": FORM3[away]},
@@ -142,7 +145,7 @@ def get_round_fixtures(round_no: int) -> list[dict]:
 def seed_freshness() -> dict:
     """种子源时效元数据：标注为缓存/示例，非实时。"""
     return {
-        "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "fetched_at": utc_now_iso(),
         "source": "零密钥·种子(示例)",
         "cached": True,
         "note": "离线种子数据，非实时；替换 live provider 后此标注由实时接口覆盖",

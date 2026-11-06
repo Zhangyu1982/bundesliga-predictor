@@ -46,6 +46,7 @@ import time
 from datetime import datetime, timedelta
 
 from data.euro_fetch import espn_team_to_code
+from data.timeutil import utc_now_iso, age_hours  # 时区口径：存 UTC 带标记，展示转本地
 from data.lineup import (_get_json, ESPN_SOCCER_BASE, LINEUP_LEAGUES,
                          fetch_match_lineup, scoreboard_events, _load, _save)
 from config import LINEUP_SHIFT as LINEUP_CFG
@@ -447,9 +448,12 @@ def build_baseline(window_matches: int | None = None, league_key: str = "BL1",
             print(f"[baseline] {code}: matches={agg['n_matches']} xi={len(xi_dicts)} "
                   f"core={len(core_dicts)} seen={len(seen_dicts)} departed={len(departed)}")
 
+    # 时区口径统一：两个字段都写 UTC 带 +00:00 的 ISO，展示时用
+    # data/timeutil.fmt_local() 转北京时间（旧文件里的无标记值仍按本地 +08:00 解析）。
+    _now_utc = utc_now_iso()
     data = {
-        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "updated_at_iso": datetime.now().isoformat(timespec="seconds"),
+        "updated_at": _now_utc,
+        "updated_at_iso": _now_utc,
         "league": LINEUP_LEAGUES.get(league_key, ""),
         "window_matches": window_matches,
         "core_rate": core_rate,
@@ -487,20 +491,16 @@ def baseline_staleness(baseline: dict | None = None, current_round: int | None =
         out.update({"stale": True, "reason": "no_baseline"})
         return out
 
-    # 天数：优先 ISO 时间戳（无时区歧义），退化到旧的 %Y-%m-%d %H:%M
+    # 天数：UTC 带标记的值直接算；历史文件的无标记值按本地 +08:00 解析（age_hours 负责）
     age_days = None
     for key in ("updated_at_iso", "updated_at"):
         raw = (bl or {}).get(key)
         if not raw:
             continue
-        try:
-            if key == "updated_at_iso":
-                age_days = (datetime.now() - datetime.fromisoformat(raw)).total_seconds() / 86400
-            else:
-                age_days = (datetime.now() - datetime.strptime(raw, "%Y-%m-%d %H:%M")).total_seconds() / 86400
+        h = age_hours(raw)
+        if h is not None:
+            age_days = h / 24.0
             break
-        except Exception:
-            continue
     out["age_days"] = round(age_days, 2) if age_days is not None else None
 
     gap = None
