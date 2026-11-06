@@ -17,6 +17,7 @@ from data.historical_data import (load_seasons, add_rolling_features,
                                   team_last_state, CODE2ENG, ENG2CODE)
 
 ARTIFACT_PATH = os.path.join(os.path.dirname(__file__), "artifacts", "models.pkl")
+VERSION = "t1.1"
 # 修复：pickle 反序列化不会调用 __init__，旧 artifact 缺字段会在使用时 AttributeError。
 # 加版本号，读到的产物版本不符就直接重训。
 _BUNDLE_VERSION = 4

@@ -17,6 +17,9 @@ DISCLAIMER = ("本系统输出为概率推演，不构成投注建议。比分 T
               "伤病与国家队负荷在赛前 48 小时仍可能显著变动，初版与确认版之间的差异是系统的设计特性，不是缺陷。")
 
 
+BUILD = "2026-11-07 01:05"   # 部署自证：每次部署改这一行
+
+
 from config import IMPORTANCE_LEVELS
 
 
@@ -991,4 +994,6 @@ with st.expander("📊 历史回测看板（近3赛季 · 918场 walk-forward ·
 # ================= P4·优先级三②：合规免责声明 =================
 st.markdown("---")
 st.caption("🤖 预测基于概率模型，仅供参考。足球反买，别墅靠海。")
+import pipeline as _pipe_mod, trainer as _trainer_mod   # noqa: E402
+st.caption(f"build: {BUILD} · pipeline: {getattr(_pipe_mod, 'VERSION', '?')} · trainer: {getattr(_trainer_mod, 'VERSION', '?')}")
 

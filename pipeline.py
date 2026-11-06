@@ -16,6 +16,8 @@ from data.historical_data import CODE2ENG
 from data.cross_competition import FatigueEngine, CrossElo
 from data.euro_fetch import fetch_current_euro
 
+VERSION = "p1.2"
+
 
 def _parse_dt(s: str):
     """ISO(可带 Z) → naive datetime；失败返回 None。"""
