@@ -1,14 +1,33 @@
 """P6 测试：真实赛果记录到 R1 偏差数据库（bias.db）+ 入库 JSON（live_results.json）合并。"""
+import gc
 import json
 import os
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scripts.record_live_result import record, _auto_pred_hit  # noqa: E402
 from data.live_results import (  # noqa: E402
     load_live_results, save_live_results, merge_with_bias,
 )
+
+
+def _cleanup(*paths):
+    """Windows 下 SQLite 连接未释放会锁文件 → 先回收临时对象再重试删除。"""
+    for _ in range(5):
+        gc.collect()
+        alive = []
+        for p in paths:
+            if not os.path.exists(p):
+                continue
+            try:
+                os.remove(p)
+            except PermissionError:
+                alive.append(p)
+        if not alive:
+            return
+        time.sleep(0.05)
 
 
 def _tmp_db():
@@ -48,7 +67,7 @@ def test_record_writes_both_db_and_json():
         assert len(lr) == 1
         assert lr[0]["match_id"] == "BUN_2627_R08_Union Berlin_FC Koln_LIVE"
     finally:
-        os.remove(db); os.path.exists(jp) and os.remove(jp)
+        _cleanup(db, jp)
 
 
 def test_missing_probs_stay_null():
@@ -62,7 +81,7 @@ def test_missing_probs_stay_null():
         lr = load_live_results(jp)
         assert lr[0]["pred_draw"] is None and lr[0]["pred_away"] is None
     finally:
-        os.remove(db); os.path.exists(jp) and os.remove(jp)
+        _cleanup(db, jp)
 
 
 def test_pred_hit_auto():
@@ -96,7 +115,7 @@ def test_record_does_not_touch_backtest_rows():
         assert s.query(season="2526", round_no=8)[0]["match_id"] == \
             "BUN_2526_R08_Werder Bremen_Union Berlin"
     finally:
-        os.remove(db); os.path.exists(jp) and os.remove(jp)
+        _cleanup(db, jp)
 
 
 def test_merge_dedup_live_first():
@@ -120,7 +139,7 @@ def test_merge_dedup_live_first():
         assert "BUN_2627_R08_Other_Match" in by_id
         assert len(merged) == 2
     finally:
-        os.remove(db); os.path.exists(jp) and os.remove(jp)
+        _cleanup(db, jp)
 
 
 def test_load_missing_returns_empty():
@@ -141,4 +160,4 @@ def test_no_predict_hit_is_null():
         assert r["pred_hit"] is None
         assert load_live_results(jp)[0]["pred_hit"] is None
     finally:
-        os.remove(db); os.path.exists(jp) and os.remove(jp)
+        _cleanup(db, jp)

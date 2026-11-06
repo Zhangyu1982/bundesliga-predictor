@@ -11,9 +11,20 @@ from datetime import datetime
 from config import (RULES, SEASON, ENSEMBLE_WEIGHTS, uncalibrated_thresholds,
                     FATIGUE_RULES, LUCK_REGRESSION, HOME_ADV)
 from schema import validate_probs, validate_stage_window
-from data.api_client import resolve_provider
+from data.api_client import resolve_provider, team_zh
 from data.historical_data import CODE2ENG
 from data.cross_competition import FatigueEngine, CrossElo
+from data.euro_fetch import fetch_current_euro
+
+
+def _parse_dt(s: str):
+    """ISO(可带 Z) → naive datetime；失败返回 None。"""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
 from rules.iteration_rules import IterationRules
 from data_stores.cache import Cache
 import trainer
@@ -252,8 +263,22 @@ class PredictionPipeline:
         fatigue_info = {
             "home_rest_days": f_home.get("rest_days"),
             "away_rest_days": f_away.get("rest_days"),
+            # P6·按小时口径（覆盖周中欧冠/欧联/欧会 → 周末德甲的真实间隔）
+            "home_rest_hours": f_home.get("rest_hours"),
+            "away_rest_hours": f_away.get("rest_hours"),
+            "home_prev_competition": f_home.get("prev_competition"),
+            "away_prev_competition": f_away.get("prev_competition"),
+            "home_prev_competition_zh": f_home.get("prev_competition_zh"),
+            "away_prev_competition_zh": f_away.get("prev_competition_zh"),
+            "home_prev_is_euro": bool(f_home.get("prev_is_euro")),
+            "away_prev_is_euro": bool(f_away.get("prev_is_euro")),
+            "home_prev_was_away": bool(f_home.get("prev_was_away")),
+            "away_prev_was_away": bool(f_away.get("prev_was_away")),
+            "home_bucket_tag": f_home.get("bucket_tag"),
+            "away_bucket_tag": f_away.get("bucket_tag"),
             "home_fatigue_discount": round(fatigue_disc_h, 4),
             "away_fatigue_discount": round(fatigue_disc_a, 4),
+            "fatigue_calibrated": bool(FATIGUE_RULES.get("calibrated", False)),
             "cl_preceding_home": cl_preceding_h,
             "cl_preceding_away": cl_preceding_a,
             "home_prev_extra_time": bool(f_home.get("prev_extra_time")),
@@ -323,6 +348,155 @@ class PredictionPipeline:
             raw += cfg["doubtful_shift"] * imp.get(im, 1.0)
         return round(min(raw, cfg["max_total_shift"]), 4)
 
+    # ---------------------------------------------------------------- 本周总览
+    def week_overview(self, days_fwd: int = 7, days_back: int = 10,
+                      with_lineup: bool = True) -> dict:
+        """「本周德甲总览」：把本周德甲赛程 + 周二/三/四欧战 + 休息小时 + 疲劳折扣
+        + 伤病 + 阵容消耗 放在同一张视图里。
+
+        这是对"德甲/欧冠分开单选"的结构性修补：周五点预测即可一次看到本周全部德甲，
+        并且每支球队的周中欧战消耗（含免费层拿不到的欧联/欧会）都在其中。
+        """
+        from datetime import datetime, timedelta
+        from data.euro_fetch import fetch_lineup, lineup_rotation_summary, \
+            EURO_LEAGUES, EURO_NAMES_ZH
+
+        today = datetime.now()
+        lo = today - timedelta(days=days_back)
+        hi = today + timedelta(days=days_fwd)
+
+        fetch = getattr(self.provider, "fetch_competition_matches", None)
+        bl1_all = fetch("BL1") if callable(fetch) else []
+        cl_all = fetch("CL") if callable(fetch) else []
+        if not bl1_all:
+            # 数据源不提供真实赛程（零密钥种子 / 未配置 token）：明确降级，不抛异常
+            return {
+                "window": [lo.strftime("%Y-%m-%d"), hi.strftime("%Y-%m-%d")],
+                "days": [], "count": 0,
+                "euro_window": {k: 0 for k in ("CL", "EL", "UECL")},
+                "lineup_note": "",
+                "fatigue_calibrated": bool(FATIGUE_RULES.get("calibrated", False)),
+                "fatigue_note": FATIGUE_RULES.get("calibration_note", ""),
+                "freshness": self.provider.freshness(),
+                "note": ("当前数据源（%s）不提供真实赛程，无法生成本周总览。"
+                         "请用带 FOOTBALL_DATA_TOKEN 的方式启动（桌面启动器已内置），"
+                         "或设置该环境变量后重启应用。" % getattr(self.provider, "name", "未知")),
+            }
+        cur = fetch_current_euro(days_back=days_back, days_fwd=days_fwd)
+        euro_all = list(cl_all) + [m for k in ("CL", "EL", "UECL")
+                                   for m in (cur.get(k) or []) if m.get("status") == "FINISHED"]
+
+        def _kick(m):
+            return _parse_dt(m.get("kickoff", ""))
+
+        # 本周德甲：从今天起 days_fwd 天内
+        fx = [m for m in bl1_all
+              if _kick(m) and today.replace(hour=0, minute=0, second=0) <= _kick(m) <= hi]
+        fx.sort(key=lambda m: m.get("kickoff") or "")
+        if not fx:
+            # 周中打开：退回"未来 14 天内最近的一个比赛周"
+            fx = [m for m in bl1_all if _kick(m) and today <= _kick(m) <= today + timedelta(days=14)]
+            fx.sort(key=lambda m: m.get("kickoff") or "")
+
+        fe = FatigueEngine(bl1_all, euro_all)
+        fm = fe.analyze(fx, cl_all)
+
+        # 每队的周中欧战（欧战在德甲这场之前、days_back 天内）
+        euro_by_code: dict[str, list] = {}
+        for key, lst in (cur or {}).items():
+            for m in lst:
+                if m.get("status") != "FINISHED":
+                    continue
+                for code, side in ((m.get("home_code"), "home"), (m.get("away_code"), "away")):
+                    if not code:
+                        continue
+                    euro_by_code.setdefault(code, []).append({
+                        "competition": key,
+                        "competition_zh": EURO_NAMES_ZH.get(key, key),
+                        "kickoff": m.get("kickoff"),
+                        "event_id": m.get("espn_id") or m.get("match_id"),
+                        "is_home": side == "home",
+                        "opponent": (m.get("away_raw") if side == "home" else m.get("home_raw")) or "",
+                        "score": m.get("score"),
+                        "is_extra_time": bool(m.get("extra_time")),
+                    })
+
+        days = []
+        seen_dates = []
+        for m in fx:
+            d = (m.get("kickoff") or "")[:10]
+            if d not in seen_dates:
+                seen_dates.append(d)
+                days.append({"date": d, "matches": []})
+            rec = fm.get(m.get("match_id")) or {}
+            home_c, away_c = m.get("home_code"), m.get("away_code")
+            row = {
+                "match_id": m.get("match_id"),
+                "kickoff": m.get("kickoff"),
+                "home_code": home_c, "away_code": away_c,
+                "home_team": team_zh(home_c), "away_team": team_zh(away_c),
+                "status": m.get("status"),
+                "injuries": m.get("injuries") or {},
+            }
+            for side, code in (("home", home_c), ("away", away_c)):
+                f = rec.get(side) or {}
+                eu = euro_by_code.get(code) or []
+                # 只保留在这场德甲之前的欧战
+                eu = [e for e in eu if e.get("kickoff") and e["kickoff"] < (m.get("kickoff") or "")]
+                latest = eu[-1] if eu else None
+                item = {
+                    "code": code, "team": team_zh(code),
+                    "rest_hours": f.get("rest_hours"),
+                    "rest_days": f.get("rest_days"),
+                    "prev_competition": f.get("prev_competition"),
+                    "prev_competition_zh": f.get("prev_competition_zh"),
+                    "prev_is_euro": f.get("prev_is_euro"),
+                    "prev_was_away": f.get("prev_was_away"),
+                    "prev_extra_time": f.get("prev_extra_time"),
+                    "bucket_tag": f.get("bucket_tag"),
+                    "fatigue_discount": f.get("fatigue_discount", 0.0),
+                    "cl_preceding": bool(f.get("cl_preceding")),
+                    "euro_matches": eu,
+                    "last_euro": latest,
+                    "lineup": None,
+                }
+                row[side] = item
+            days[-1]["matches"].append(row)
+
+        # 阵容（只抓最近一场欧战，且有 event_id 的德甲队）
+        lineup_note = ""
+        if with_lineup:
+            for dgrp in days:
+                for row in dgrp["matches"]:
+                    for side in ("home", "away"):
+                        it = row[side]
+                        le = it.get("last_euro")
+                        if not le or not le.get("event_id"):
+                            continue
+                        key = le.get("competition")
+                        if key not in EURO_LEAGUES:
+                            continue
+                        try:
+                            lu = fetch_lineup(str(le["event_id"]), key)
+                            summ = lineup_rotation_summary(lu, side="home" if le["is_home"] else "away")
+                            it["lineup"] = summ
+                        except Exception:
+                            it["lineup"] = {"available": False, "note": "阵容抓取失败"}
+            lineup_note = ("阵容数据来自 ESPN 赛后 rosters：只反映**欧战当场的首发/换人**，"
+                           "不含逐人出场分钟，也不提供赛中伤情；德甲本场首发要等开赛前 1 小时才有，"
+                           "因此这里只作为「轮换风险」提示，不进入概率计算。")
+
+        return {
+            "window": [lo.strftime("%Y-%m-%d"), hi.strftime("%Y-%m-%d")],
+            "days": days,
+            "count": len(fx),
+            "euro_window": {k: len(cur.get(k) or []) for k in ("CL", "EL", "UECL")},
+            "lineup_note": lineup_note,
+            "fatigue_calibrated": bool(FATIGUE_RULES.get("calibrated", False)),
+            "fatigue_note": FATIGUE_RULES.get("calibration_note", ""),
+            "freshness": self.provider.freshness(),
+        }
+
     def predict_round(self, round_no: int, stage: str = "初版",
                       is_first_round_after_fifa: bool = False,
                       manual_injuries: dict | None = None,
@@ -369,13 +543,23 @@ class PredictionPipeline:
                 m["injuries"] = inj
             meta["realtime_injury_available"] = True   # 手动伤病视为具备实时伤病
 
-        # 疲劳特征：德甲轮次叠加欧冠赛程（欧战干扰），CL 轮不需（自身即欧战）
+        # 疲劳特征：德甲轮次叠加欧战赛程（欧冠 + 欧联 + 欧会），CL 轮不需（自身即欧战）
         fatigue_map = {}
         if competition == "BL1":
             try:
                 bl1_all = self.provider.fetch_competition_matches("BL1")
                 cl_all = self.provider.fetch_competition_matches("CL")
-                fe = FatigueEngine(bl1_all, cl_all)
+                euro_all = list(cl_all)
+                try:
+                    # ESPN 补齐欧联/欧会（football-data 免费层 EL=403 / UECL=404）
+                    cur = fetch_current_euro(days_back=10)
+                    for key in ("CL", "EL", "UECL"):
+                        for m in cur.get(key) or []:
+                            if m.get("status") == "FINISHED":
+                                euro_all.append(m)
+                except Exception:
+                    pass
+                fe = FatigueEngine(bl1_all, euro_all)
                 fatigue_map = fe.analyze(fixtures, cl_all)
             except Exception:
                 fatigue_map = {}

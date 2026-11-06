@@ -33,6 +33,22 @@ class BiasStore:
         self.conn.execute(_SCHEMA)
         self.conn.commit()
 
+    def close(self) -> None:
+        """显式释放 SQLite 连接。Windows 上连接不关会让文件无法删除/替换（WinError 32）。"""
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def __del__(self):
+        self.close()
+
     def write_records(self, records: list[dict]) -> int:
         """批量写入比对记录（upsert）。"""
         sql = ("INSERT OR REPLACE INTO bias_predictions "

@@ -24,6 +24,8 @@ from config import DC_RHO, DC_DECAY
 
 # ---------------- 轻量 DC 拟合（回测用，速度快，不做 rho 网格） ----------------
 def _fit_dc(past: pd.DataFrame) -> dict:
+    past = past.copy()
+    past["Date"] = pd.to_datetime(past["Date"])   # 兼容新版 pandas：dt 访问器要求真 datetime
     teams = sorted(set(past["HomeTeam"]) | set(past["AwayTeam"]))
     if not teams:
         return {}

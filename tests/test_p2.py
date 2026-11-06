@@ -180,12 +180,19 @@ def test_fatigue_engine_rest_days():
     assert fe.rest_days("BAY", d, exclude_id="b1") == 5
 
 
-# ---------- P2 #7：疲劳系数标定（calibrated=True，轮换折扣折入） ----------
-def test_fatigue_calibrated_honest():
-    assert FATIGUE_RULES["calibrated"] is True
-    assert 0.0 < FATIGUE_RULES["xG_discount_per_day"] <= 0.05      # 实测 1.4%
-    assert 0.0 < FATIGUE_RULES["xG_discount_max"] <= 0.10          # 实测 4%
-    assert FATIGUE_RULES.get("cl_rotation_discount", 0.0) > 0.0    # 轮换折扣已标定
+# ---------- P2 #7 / P6：疲劳系数标定（按小时口径，实测不显著 → 诚实 calibrated=False） ----------
+def test_fatigue_calibration_honest():
+    assert FATIGUE_RULES["min_rest_hours"] == 96                    # 按小时口径（覆盖周四欧联→周日）
+    buckets = FATIGUE_RULES["hour_bucket_discounts"]
+    assert buckets and all(0.0 <= b["discount"] <= FATIGUE_RULES["xG_discount_max"] for b in buckets)
+    assert 0.0 < FATIGUE_RULES["xG_discount_max"] <= 0.10           # 封顶 4%
+    assert FATIGUE_RULES.get("cl_rotation_discount", 0.0) > 0.0
+    # 实测 z=1.03 不显著 → 必须如实打黄牌，不得置 True
+    assert FATIGUE_RULES["calibrated"] is False
+    assert FATIGUE_RULES.get("calibration_note")
+    # 已删除的旧字段不得复活（否则旧口径会偷偷生效）
+    assert "xG_discount_per_day" not in FATIGUE_RULES
+    assert set(FATIGUE_RULES["euro_competitions"]) == {"CL", "EL", "UECL"}
 
 
 def test_fatigue_cl_preceding_applies_rotation_discount():

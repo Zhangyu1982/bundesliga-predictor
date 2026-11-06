@@ -298,6 +298,203 @@ _bk0 = load_backup()
 if not ss["manual_injuries"] and _bk0.get("manual_injuries"):
     ss["manual_injuries"] = _bk0["manual_injuries"]
 
+# ================= P6·本周德甲总览（周五点预测的主视图） =================
+@st.cache_data(ttl=900, show_spinner=False)
+def _week_overview_cached() -> dict:
+    """缓存本周总览（含 ESPN 欧战赛程与阵容，15 分钟过期），避免每次 rerun 重抓。"""
+    return pipe.week_overview(days_fwd=7, days_back=10, with_lineup=True)
+
+
+_DATE_ZH = {0: "周一", 1: "周二", 2: "周三", 3: "周四", 4: "周五", 5: "周六", 6: "周日"}
+
+
+def _date_zh(d: str) -> str:
+    import datetime
+    try:
+        dt = datetime.date.fromisoformat(d)
+        return f"{dt.month}月{dt.day}日 {_DATE_ZH[dt.weekday()]}"
+    except Exception:
+        return d
+
+
+def _hours_label(h) -> str:
+    if h is None:
+        return "无纪录"
+    return f"{h:.1f}h（{h/24:.1f} 天）"
+
+
+def _score_txt(euro: dict) -> str:
+    sc = (euro or {}).get("score") or {}
+    ft = sc.get("fullTime") or {}
+    h, a = ft.get("home"), ft.get("away")
+    if h is None or a is None:
+        return ""
+    return f"{h}-{a}"
+
+
+def _rotation_risk(lineup: dict | None) -> tuple[str, str, str] | None:
+    """由欧战首发里「被换下人数/首发人数」给轮换消耗弱评级（不进模型）。"""
+    if not lineup or not lineup.get("available"):
+        return None
+    n = lineup.get("starter_count") or 0
+    out = len(lineup.get("subbed_out") or [])
+    if n < 11:
+        return None
+    ratio = out / n
+    if ratio >= 0.45:
+        return ("较高", "#B91C1C", f"欧战首发 {out}/{n} 人被换下，消耗信号偏强")
+    if ratio >= 0.27:
+        return ("中等", "#B45309", f"欧战首发 {out}/{n} 人被换下")
+    return ("较低", "#047857", f"欧战首发 {out}/{n} 人被换下，主力基本踢完")
+
+
+def _team_brief(it: dict) -> str:
+    """一支球队本周疲劳概要（一句话）。"""
+    bits = [f"休息 **{_hours_label(it.get('rest_hours'))}**"]
+    pc = it.get("prev_competition_zh") or "—"
+    if it.get("prev_is_euro"):
+        bits.append(f"上一场 ⚽ **{pc}**" + ("（客场）" if it.get("prev_was_away") else "（主场）"))
+    else:
+        bits.append(f"上一场 {pc}")
+    disc = it.get("fatigue_discount") or 0.0
+    bits.append(f"疲劳 xG 折扣 **{disc:.0%}**" if disc else "疲劳折扣 0%")
+    if it.get("prev_extra_time"):
+        bits.append("⚠️ 上一场打满加时")
+    if it.get("cl_preceding"):
+        bits.append("⚠️ 欧冠前置，可能轮换")
+    return " · ".join(bits)
+
+
+def _render_week_overview() -> None:
+    try:
+        ov = _week_overview_cached()
+    except Exception as e:
+        st.error(f"本周总览加载失败：{e}")
+        return
+
+    if ov.get("note"):
+        st.info("ℹ️ " + ov["note"])
+        return
+
+    st.markdown(f"### 🗓️ 本周德甲总览 · 共 {ov['count']} 场")
+    st.caption(f"窗口 {ov['window'][0]} → {ov['window'][1]}　·　周中欧战已覆盖："
+               + "、".join(f"{k} {v} 场" for k, v in (ov.get("euro_window") or {}).items())
+               + "（欧冠用 football-data / 欧联·欧会用 ESPN 补齐）")
+
+    if not ov.get("fatigue_calibrated"):
+        st.warning("⚠️ **疲劳折扣未标定（calibrated=False），仅供参考。** "
+                   + (ov.get("fatigue_note") or ""))
+
+    # ---------- 本周受周中欧战影响的球队 ----------
+    affected = []
+    for d in ov["days"]:
+        for m in d["matches"]:
+            for it in (m["home"], m["away"]):
+                if it.get("prev_is_euro") and it.get("rest_hours") is not None:
+                    affected.append(it)
+    if affected:
+        st.markdown("#### ⚽ 本周受周中欧战影响的球队")
+        rows = ["| 球队 | 周中欧战（对手 / 主客） | 赛果 | 距德甲 | 疲劳折扣 | 轮换消耗 |",
+                "|---|---|---|---|---|---|"]
+        for it in affected:
+            le = it.get("last_euro") or {}
+            comp = (le.get("competition_zh") or it.get("prev_competition_zh") or "欧战")
+            opp = le.get("opponent") or "—"
+            ha = "主场" if le.get("is_home") else "客场"
+            risk = _rotation_risk(it.get("lineup"))
+            risk_txt = (f"<span style='color:{risk[1]};font-weight:600'>{risk[0]}</span>"
+                        if risk else "—")
+            rows.append(
+                f"| {it['team']} | {comp} {ha} vs {opp} | {_score_txt(le) or '—'} | "
+                f"{_hours_label(it.get('rest_hours'))} | {(it.get('fatigue_discount') or 0):.0%} | {risk_txt} |")
+        st.markdown("\n".join(rows), unsafe_allow_html=True)
+        st.caption("「轮换消耗」只看该队欧战首发里被换下的人数比例，是弱信号；"
+                   "ESPN 不提供逐人出场分钟与赛中伤情，德甲本场首发要开赛前 1 小时才有。")
+    else:
+        st.info("本周没有球队处于周中欧战之后的短间隔窗口。")
+
+    # ---------- 逐日逐场 ----------
+    st.markdown("#### 📅 逐场明细")
+    for d in ov["days"]:
+        st.markdown(f"**{_date_zh(d['date'])}**")
+        for m in d["matches"]:
+            with st.container(border=True):
+                c1, c2 = st.columns([4, 1])
+                with c1:
+                    st.markdown(f"**{m['home_team']} vs {m['away_team']}**")
+                with c2:
+                    st.markdown(f"`{(m['kickoff'] or '')[11:16]}`")
+                st.markdown(f"🏠 {m['home_team']}：{_team_brief(m['home'])}")
+                st.markdown(f"✈️ {m['away_team']}：{_team_brief(m['away'])}")
+
+                # 伤病（沿用 football-data / ESPN 抓到的赛季伤病）
+                inj = m.get("injuries") or {}
+                hk = inj.get("home_key_out") or []
+                ak = inj.get("away_key_out") or []
+                if hk or ak:
+                    st.markdown(f"🏥 缺阵：主 [{_fmt_inj_colored(hk)}] ／ 客 [{_fmt_inj_colored(ak)}]",
+                                unsafe_allow_html=True)
+
+                # 阵容与轮换风险
+                lu_h = m["home"].get("lineup")
+                lu_a = m["away"].get("lineup")
+                risks = []
+                for it, lu in ((m["home"], lu_h), (m["away"], lu_a)):
+                    r = _rotation_risk(lu)
+                    if r:
+                        risks.append(f"{it['team']} <span style='color:{r[1]};font-weight:600'>{r[0]}</span>（{r[2]}）")
+                if risks:
+                    st.markdown("🔄 轮换风险提示：" + "；".join(risks), unsafe_allow_html=True)
+                elif lu_h is not None or lu_a is not None:
+                    st.caption("🔄 本周无双队欧战阵容可比对（至少一队无周中欧战）。")
+
+                with st.expander("展开：欧战阵容名单与消耗明细"):
+                    shown = False
+                    for it, lu in ((m["home"], lu_h), (m["away"], lu_a)):
+                        if not lu or not lu.get("available"):
+                            continue
+                        shown = True
+                        le = it.get("last_euro") or {}
+                        st.markdown(f"**{it['team']}**（{le.get('competition_zh','欧战')} "
+                                    f"{'主场' if le.get('is_home') else '客场'} vs {le.get('opponent','—')}）")
+                        st.caption("首发：" + "、".join(lu.get("starters") or []) or "—")
+                        if lu.get("subbed_out"):
+                            st.caption("被换下：" + "、".join(lu["subbed_out"]))
+                        if lu.get("bench_used"):
+                            st.caption("替补登场：" + "、".join(lu["bench_used"]))
+                        st.caption(f"替补席 {lu.get('bench_size', 0)} 人 · 全场换人事件 {lu.get('sub_events', 0)} 次")
+                    if not shown:
+                        st.caption("暂无可用欧战阵容数据。")
+
+    # ---------- 边界说明 ----------
+    st.divider()
+    with st.expander("ℹ️ 这份总览的口径与边界（务必看）"):
+        st.markdown(
+            "- **为什么要总览**：原来「德甲 / 欧冠」是单选入口，周五点德甲时看不到周中欧战的真实消耗；"
+            "欧联/欧会此前被免费层挡在门外（EL=403 / UECL=404），现已用 ESPN 补齐。\n"
+            "- **疲劳怎么算**：按「上一场任何赛事 → 本场」的**实际小时数**分桶折扣，"
+            "不再用「休息天数 <3 天」那种永远触发不了的旧口径（周四欧联→周日恰好 3 天）。\n"
+            "- **标定结果**：三季 918 场德甲 + 231 条欧战样本实测，欧战后 <96h 与正常一周一赛的"
+            "进球差异 **z≈1.03，统计不显著**，分桶还非单调 → 所以 `calibrated=False`，折扣是"
+            "「实测分桶 × 0.3 收缩、封顶 4%」的保守量级，**不是**拟合出来的强效应。\n"
+            "- **做得到 / 做不到**：欧战赛程、比分、阵容（首发/换人）可拿到；"
+            "**逐人出场分钟、赛中伤病拿不到**（ESPN 无该事件类型），所以伤病只有赛前缺阵名单，"
+            "赛中受伤只能靠「被提前换下」这种弱信号提示 + 你自己确认。\n"
+            "- **阵容不进模型**：只作轮换风险提示，不参与概率计算。")
+
+
+def _view_switch() -> str:
+    return st.radio("视图", ["🗓️ 本周德甲总览", "🎯 单赛事预测"],
+                    horizontal=True, index=0,
+                    help="总览=周五一次看本周全部德甲（含周二/三/四欧战消耗）；"
+                         "单赛事=原来的逐场预测（德甲 / 欧冠单选）")
+
+
+VIEW = _view_switch()
+if VIEW.startswith("🗓️"):
+    _render_week_overview()
+    st.stop()
+
 # ---------- 跨赛事切换器（P2·跨赛事） ----------
 from config import COMPETITIONS, FATIGUE_RULES
 comp_labels = {k: f"{COMPETITIONS[k]['name']} · {COMPETITIONS[k]['note']}" for k in COMPETITIONS}
@@ -465,8 +662,14 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
             if fatigue.get("away_prev_extra_time"):
                 markers.append(f"⚠️ {c['away_team']} 上一场打满120分钟加时 → 极端疲劳惩罚")
             if fatigue.get("home_fatigue_discount", 0) or fatigue.get("away_fatigue_discount", 0):
-                markers.append(f"疲劳xG折扣 主{fatigue.get('home_fatigue_discount')}/客{fatigue.get('away_fatigue_discount')}"
-                               f"（休息 主{fatigue.get('home_rest_days','—')}/客{fatigue.get('away_rest_days','—')}天）")
+                markers.append(
+                    f"疲劳xG折扣 主{fatigue.get('home_fatigue_discount')}/客{fatigue.get('away_fatigue_discount')}"
+                    f"（休息 主{fatigue.get('home_rest_hours')}h/客{fatigue.get('away_rest_hours')}h"
+                    f"，上一场 主{fatigue.get('home_prev_competition_zh','—')}/"
+                    f"客{fatigue.get('away_prev_competition_zh','—')}）")
+            # P6·口径未标定 → 卡片内如实标注
+            if fatigue.get("home_prev_is_euro") or fatigue.get("away_prev_is_euro"):
+                markers.append("⚽ 含周中欧战（欧冠/欧联/欧会）消耗；疲劳折扣未标定，请看总览页的口径说明")
             # P4·优先级二②：战意规则硬扣标记
             if fatigue.get("home_motivation_penalty"):
                 markers.append(f"⚠️ {c['home_team']} 战意不足：欧冠前3天联赛+对手弱旅 → 扣xG {fatigue['home_motivation_penalty']}")

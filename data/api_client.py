@@ -178,7 +178,8 @@ class LiveFootballDataProvider(_CachedProvider):
         url = f"{self.base}/competitions/{LEAGUE}/standings"
         try:
             data = self._call("standings:all", url, self._hdr(), {}, self._daily_limit)
-        except ProviderUnavailableError:
+        except (ProviderUnavailableError, requests.HTTPError, requests.RequestException):
+            # 免费层 10req/min：429 限流时积分榜缺失不应拖垮整轮预测
             return {}
         try:
             table = data.get("standings", [{}])[0].get("table", [])
@@ -346,6 +347,10 @@ class ZeroKeySeedProvider(_BaseProvider):
 
     def fetch_round(self, round_no: int) -> list[dict]:
         return get_round_fixtures(round_no)
+
+    def fetch_competition_matches(self, comp: str) -> list[dict]:
+        """种子源没有真实赛程：返回空，由调用方（本周总览）降级提示，而不是抛 AttributeError。"""
+        return []
 
     def get_event_xg(self, match_id: str) -> dict | None:
         return None   # 种子无 xG
