@@ -26,6 +26,8 @@ ENSEMBLE_WEIGHTS = {
     "xgboost": 0.30,
     "lightgbm": 0.15,
 }
+# 球员重要性档位（影响 injury_shift 加权；放在 config 避免 app ↔ injury_text 循环导入）
+IMPORTANCE_LEVELS = ["核心", "轮换", "替补"]
 CATBOOST_MIN_SAMPLES = 2000   # 德甲数据 <=2000 场时禁用 CatBoost（防过拟合）
 
 # ============ 分期/阶段 ============

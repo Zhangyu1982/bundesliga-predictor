@@ -16,7 +16,7 @@ DISCLAIMER = ("本系统输出为概率推演，不构成投注建议。比分 T
               "伤病与国家队负荷在赛前 48 小时仍可能显著变动，初版与确认版之间的差异是系统的设计特性，不是缺陷。")
 
 
-IMPORTANCE_LEVELS = ["核心", "轮换", "替补"]
+from config import IMPORTANCE_LEVELS
 
 
 def _merge_injuries(manual: dict | None, checked_candidates: list[dict]) -> dict | None:
@@ -37,59 +37,15 @@ def _merge_injuries(manual: dict | None, checked_candidates: list[dict]) -> dict
     return out or None
 
 
-def _parse_importance(player: str) -> tuple[str, str]:
-    """解析球员条目里的重要性标注 [核心]/[轮换]/[替补]，无标注默认核心。"""
-    for tag in IMPORTANCE_LEVELS:
-        marker = f"[{tag}]"
-        if marker in player:
-            return player.replace(marker, "").strip(), tag
-    return player.strip(), "核心"
+# 伤病文本解析已抽到 injury_text.py（便于单测）；以下别名保持既有调用点不变
+from injury_text import parse_importance as _parse_importance
+from injury_text import parse_manual_injuries as _parse_manual_injuries
 
 
-def _parse_manual_injuries(text: str) -> dict | None:
-    """解析手动录入伤病文本 → {code: {"key_out":[...],"doubtful":[...]}}，条目含重要性。
-    格式每行：`队名关键词: 缺阵球员,存疑球员?`；重要性用 `球员[轮换]` 标注。空 → None。"""
-    from data.seed_data import TEAMS
-    from data.api_client import FDO_NAME2CODE, EXTRA_TEAMS_ZH
-    text = (text or "").strip()
-    if not text:
-        return None
-    # 名称关键词 → code（优先中文/种子名，其次真实 API 名）
-    code_by_key = {}
-    for c, zh in {**TEAMS, **EXTRA_TEAMS_ZH}.items():
-        code_by_key[zh] = c
-    for raw, c in FDO_NAME2CODE.items():
-        code_by_key[raw] = c
-        code_by_key.setdefault(raw.replace(" ", ""), c)
-        code_by_key.setdefault(raw.split()[-1], c)   # "Bayern München" → "München"
-    out = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or ":" not in line:
-            continue
-        team_part, players = line.split(":", 1)
-        team_part = team_part.strip()
-        code = None
-        for key, c in code_by_key.items():
-            # 双向子串匹配：既支持"拜仁慕尼黑"（全名）也支持"拜仁"（简称/关键词）
-            if key and (key in team_part or team_part in key):
-                code = c
-                break
-        if code is None:
-            continue
-        key_out, doubtful = [], []
-        for p in players.split(","):
-            p = p.strip()
-            if not p:
-                continue
-            if p.endswith("?") or p.startswith("存疑"):
-                name, imp = _parse_importance(p.strip("?存疑 "))
-                doubtful.append({"name": name, "importance": imp})
-            else:
-                name, imp = _parse_importance(p)
-                key_out.append({"name": name, "importance": imp})
-        out[code] = {"key_out": key_out, "doubtful": doubtful}
-    return out or None
+def _manual_injuries_unparsed(text: str, parsed: dict | None = None) -> list[str]:
+    """无法解析的行（UI 明确报错，避免"录了等于没录"）。"""
+    from injury_text import unparsed_lines
+    return unparsed_lines(text)
 
 
 def _fmt_inj(lst) -> str:
@@ -506,7 +462,9 @@ with col_r:
     r = st.selectbox("选择轮次", range(1, 35), index=ss["round"] - 1)
     ss["round"] = r
 with col_s:
-    stage_sel = st.radio("阶段", ["初版", "确认版"], horizontal=True)
+    stage_sel = st.radio("阶段", ["初版", "确认版"], horizontal=True,
+                         index=0 if ss.get("stage", "初版") == "初版" else 1,
+                         key="stage_radio")
     ss["stage"] = stage_sel
 
 # ---------- 伤病获取：ESPN 自动抓取 + 手动录入兜底 ----------
@@ -539,6 +497,9 @@ with st.expander("🏥 伤病获取（ESPN 自动抓取 + 手动录入兜底）"
                              key=f"cand_imp_{i}", label_visibility="collapsed")
     else:
         st.caption("（尚未抓取 / 当前 ESPN 无德甲伤病记录 → 请用下方手动录入）")
+    st.caption("说明：ESPN 足球侧没有结构化伤病接口（实测 `/soccer/ger.1/injuries` 恒返回 0 条、"
+               "官方伤病页 404），自动抓取只能从德甲新闻里提取**文字线索**，准确性有限，"
+               "请以手动录入为准。")
     st.divider()
     st.markdown("**手动录入（兜底）**　格式：`队名: 缺阵球员,存疑球员?`；重要性用 `球员[轮换]` 标注。　例：`拜仁: 凯恩[核心],穆夏拉[轮换],格纳布里?[替补]`")
 
@@ -554,13 +515,25 @@ with st.expander("🏥 伤病获取（ESPN 自动抓取 + 手动录入兜底）"
         height=80, placeholder="美因茨: 布卡特[核心]\n拜仁: 凯恩,穆夏拉[轮换]",
         on_change=_persist_manual)
     if ss["manual_injuries"].strip():
-        st.success("✅ 已录入伤病（实时保存到本地 JSON，刷新不丢失），确认版复算将启用（R2 injury_shift 按球员重要性加权，未标定）")
+        parsed_txt = _parse_manual_injuries(ss["manual_injuries"])
+        bad_lines = _manual_injuries_unparsed(ss["manual_injuries"], parsed_txt)
+        if parsed_txt:
+            st.success("✅ 已录入伤病（实时保存到本地 JSON，刷新不丢失），确认版复算将启用（R2 injury_shift 按球员重要性加权，未标定）")
+            st.caption("解析结果：" + "；".join(f"{c} 缺阵{len(v['key_out'])}人/存疑{len(v['doubtful'])}人"
+                                              for c, v in parsed_txt.items()))
+        if bad_lines:
+            st.error("⚠️ 以下行未能解析（队名未识别或缺英文冒号分隔），这些行的伤病**不会生效**："
+                     + " ／ ".join(bad_lines)
+                     + "　正确格式：`拜仁: 凯恩[核心],穆夏拉?[轮换]`")
 
 # 数据源能力说明
 auto_has = bool(ss["auto_candidates"]) and any(st.session_state.get(f"cand_{i}", False)
                                                for i in range(len(ss["auto_candidates"])))
-realtime_injury = (pipe.provider.realtime_injury_available
-                   or bool(ss["manual_injuries"].strip()) or auto_has)
+manual_ok = bool(_parse_manual_injuries(ss["manual_injuries"]))
+realtime_injury = (pipe.provider.realtime_injury_available or manual_ok or auto_has)
+if ss["manual_injuries"].strip() and not manual_ok:
+    st.error("⚠️ 伤病文本已填写但**没有任何一行能被解析**（队名未识别或缺英文冒号），"
+             "本次会按无伤病处理。请按 `队名: 球员` 格式修正上方红字提示的行。")
 if not pipe.provider.realtime_injury_available:
     st.caption("数据源说明：football-data.org 不提供伤病接口；TheSportsDB(403)/Transfermarkt(Cloudflare)/"
                "Google新闻/新浪均被网络阻断；已接入 **ESPN 直连自动抓取**（上方按钮）+ 手动录入兜底。")
@@ -568,8 +541,7 @@ if not pipe.provider.realtime_injury_available:
 # ---------- 验收条件 #3：确认版拦截（无实时伤病亦无手动录入） ----------
 if ss["stage"] == "确认版" and not realtime_injury:
     st.warning("⛔ **暂无赛前 48h 实时伤病数据，无法生成确认版。** "
-               "请在上方手动录入伤病名单（方案 C），否则系统拦截并保留为初版。")
-    ss["stage"] = "初版"
+               "请在上方手动录入伤病名单（方案 C），否则本次生成会被逐场降级为初版（卡片右上角会标 [初版] 并在下方给出拦截提示）。")
 
 # ================= 预测输出 =================
 # P4·优先级一②③：按钮防抖禁用 + 全局异常兜底（超限红条，不抛堆栈）
@@ -621,11 +593,11 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
                 hl, hr = st.columns([3, 1])
                 hl.markdown(f"**{idx}. {c['home_team']} vs {c['away_team']}**")
                 hr.markdown(f"阶段 `{c['stage']}`", help="初版=基准；确认版=含伤病复算")
-                st.markdown(f"推荐 **{pick}** · 预测比分 `{top}`")
+                st.markdown(f"推荐 **{pick}** · 最可能比分 `{top}`")
                 st.progress(p["home_win"], text=f"主胜 {p['home_win']:.0%}")
                 st.progress(p["draw"], text=f"平局 {p['draw']:.0%}")
                 st.progress(p["away_win"], text=f"客胜 {p['away_win']:.0%}")
-        st.caption("胜/平/负为概率；预测比分取 Top1（分布最集中区域）。点开下方卡片可看伤病/解释等细节。")
+        st.caption("胜/平/负为概率，推荐取三者概率最高的一项（平局也参与比较）；最可能比分取 Top1（分布最集中区域），与推荐方向可能不同。点开下方卡片可看伤病/解释等细节。")
 
     # 确认版被拦截的整体提示
     blocked = [c for c in cards if c.get("confirm_blocked")]
@@ -640,7 +612,9 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
             title_pick = "基准"
         else:
             pp = c["probabilities"]
-            title_pick = f"{c['pick']} ({pp['home_win'] if c['pick']==c['home_team']+'胜' else pp['away_win']:.0%})"
+            # 推荐方向取三者最大，概率直接用 pick_prob（平局也正确）
+            _dir = c.get("pick_dir") or max(("home_win", "draw", "away_win"), key=lambda k: pp[k])
+            title_pick = f"{c['pick']} ({c.get('pick_prob', pp[_dir]):.0%})"
         with st.expander(f"{title} | {title_pick} [{c['stage']}]"):
             # ---------- 验收条件 #2：卡片内未标定阈值黄色徽章 ----------
             if uncal:

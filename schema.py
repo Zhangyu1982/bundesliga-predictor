@@ -38,10 +38,18 @@ def validate_probs(probs: Dict[str, float], tol: float = 1e-3) -> None:
 
 
 def validate_stage_window(last_updated: str, kickoff: str, window_hours: int) -> bool:
-    """确认版强制赛前 window_hours 内复算；否则视为初版并提示。"""
-    from datetime import datetime
-    fmt = "%Y-%m-%dT%H:%M:%S"
-    updated = datetime.fromisoformat(last_updated[:19])
-    ko = datetime.fromisoformat(kickoff[:19])
+    """确认版强制赛前 window_hours 内复算；否则视为初版并提示。
+    注意：kickoff 来自 football-data.org，是带时区的 UTC（...Z）；last_updated 是本地 +08:00。
+    直接截断前 19 字符做 naive 相减会把 +8h 时差算进去，导致"窗口内"被误判成"窗口外"、
+    确认版被无谓打回初版。这里统一按带时区解析后比较。"""
+    from datetime import datetime, timedelta, timezone
+    local_tz = timezone(timedelta(hours=8))
+
+    def _dt(s: str) -> datetime:
+        d = datetime.fromisoformat((s or "").strip().replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=local_tz)
+
+    updated = _dt(last_updated)
+    ko = _dt(kickoff)
     hours_before = (ko - updated).total_seconds() / 3600.0
     return 0 < hours_before <= window_hours

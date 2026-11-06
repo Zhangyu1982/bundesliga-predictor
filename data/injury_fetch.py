@@ -153,7 +153,10 @@ def fetch_espn_news_candidates(limit: int = 25) -> list[dict]:
 
 
 def fetch_all_candidates() -> dict:
-    """合并 ESPN 官方伤病 + 新闻提取候选。返回 {candidates, note, espn_injuries_count}。"""
+    """合并 ESPN 官方伤病 + 新闻提取候选。返回 {candidates, note, espn_injuries_count}。
+    实测（2026-11）：ESPN 足球侧并未提供结构化伤病数据 —— /soccer/ger.1/injuries 恒返回
+    injuries=[]、team 级 injuries 接口返回 {}、网页伤病页 404；只有新闻文本里有伤病线索。
+    所以结构化来源本身不可用，不能把"0 条"当成偶发失败。"""
     structured = fetch_espn_injuries()
     news = fetch_espn_news_candidates()
     seen = set()
@@ -164,11 +167,15 @@ def fetch_all_candidates() -> dict:
             continue
         seen.add(key)
         merged.append(c)
-    note = "ESPN 官方伤病接口当前无记录" if not structured else f"ESPN 官方伤病 {len(structured)} 条"
+    if structured:
+        note = f"ESPN 官方伤病 {len(structured)} 条"
+    else:
+        note = "ESPN 足球侧无结构化伤病接口（/injuries 恒返回 0 条，官方伤病页 404）"
     if news:
-        note += f"；新闻关键词提取 {len(news)} 条候选（请人工复核勾选）"
+        note += f"；新闻关键词提取 {len(news)} 条线索（非官方数据，请人工复核后再勾选）"
     return {"candidates": merged, "note": note,
-            "espn_injuries_count": len(structured), "news_candidates_count": len(news)}
+            "espn_injuries_count": len(structured), "news_candidates_count": len(news),
+            "structured_available": bool(structured)}
 
 
 # =============================================================================
@@ -204,11 +211,12 @@ def save_backup(payload: dict) -> None:
 
 
 def _espn_reachable() -> bool:
-    """探测 ESPN 实时接口是否可达（一次轻量 /injuries 请求）。失败/超时返回 False。
+    """探测 ESPN 接口是否可达。改用 /news 判定：/injuries 恒返回 200+空数组，
+    用它判可达会把"接口没数据"误报成"抓取成功 0 条"，是用户感知 bug 的来源之一。
     维护开关：环境变量 INJURY_FORCE_FALLBACK=1 时强制降级（用于测试/屏蔽ESPN场景验证本地兜底）。"""
     if _os.environ.get("INJURY_FORCE_FALLBACK") == "1":
         return False
-    return _get(f"{ESPN_BASE}/injuries", timeout=8) is not None
+    return _get(f"{ESPN_BASE}/news", timeout=8) is not None
 
 
 def _live_fetch_candidates() -> dict | None:

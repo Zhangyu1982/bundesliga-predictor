@@ -118,20 +118,36 @@ class PredictionPipeline:
         feats = trainer.build_feature_vector(b, h, a)
         gbm = b.gbm_prob(feats)
         w = ENSEMBLE_WEIGHTS
+        # ---------- GBM 可信度护栏 ----------
+        # 树模型在"双方滚动特征全为默认值(1.0)"（升班马/无历史队）或输出单类压倒性概率时会外推，
+        # 实测 汉堡vs门兴 GBM 给出 平局91% / 主胜2.6%，与 Elo(45/18/37)、DC(51/28/21) 完全背离。
+        # 这类输出不能按固定权重直融，按可信度降权，剩余权重按 Elo:DC 原比例重分配。
+        gbm_w = w["xgboost"] + w["lightgbm"]
+        trust = 1.0
+        gmax, gmin = max(gbm.values()), min(gbm.values())
+        if gmax >= 0.80 or gmin <= 0.05:
+            trust = 0.0
+        elif (abs(feats["form_home"] - 1.0) < 1e-9 and abs(feats["form_away"] - 1.0) < 1e-9
+              and abs(feats["roll_hg_home"] - 1.0) < 1e-9 and abs(feats["roll_hg_away"] - 1.0) < 1e-9):
+            trust = 0.3
+        w_elo, w_dc, w_gbm = w["elo"], w["poisson"], gbm_w * trust
+        if trust < 1.0:
+            rest = max(1.0 - w_gbm, 0.0)
+            base = w["elo"] + w["poisson"]
+            if base > 0:
+                w_elo, w_dc = rest * w["elo"] / base, rest * w["poisson"] / base
         fused = {
-            "home_win": w["elo"] * elo["home_win"] + w["poisson"] * dc["home_win"]
-                        + (w["xgboost"] + w["lightgbm"]) * gbm["home_win"],
-            "draw": w["elo"] * elo["draw"] + w["poisson"] * dc["draw"]
-                    + (w["xgboost"] + w["lightgbm"]) * gbm["draw"],
-            "away_win": w["elo"] * elo["away_win"] + w["poisson"] * dc["away_win"]
-                        + (w["xgboost"] + w["lightgbm"]) * gbm["away_win"],
+            "home_win": w_elo * elo["home_win"] + w_dc * dc["home_win"] + w_gbm * gbm["home_win"],
+            "draw": w_elo * elo["draw"] + w_dc * dc["draw"] + w_gbm * gbm["draw"],
+            "away_win": w_elo * elo["away_win"] + w_dc * dc["away_win"] + w_gbm * gbm["away_win"],
         }
         s = sum(fused.values())
         fused = {k: v / s for k, v in fused.items()}
-        matrix = b.dc_score_matrix(h, a, 8, home_disc, away_disc)
+        matrix = b.dc_score_matrix(h, a, 8, home_disc + inj_shift_h, away_disc + inj_shift_a)
         top2 = sorted(matrix.items(), key=lambda kv: -kv[1])[:2]
         return {
             "fused": fused, "elo": elo, "dc": dc, "gbm": gbm,
+            "gbm_trust": round(trust, 3),
             "score_top2": [{"score": f"{i}:{j}", "prob": round(p, 3)} for (i, j), p in top2],
         }
 
@@ -238,7 +254,8 @@ class PredictionPipeline:
         dc = res.get("dc", res.get("elo", res))   # 跨赛事模式无 dc → 回退 elo/fused
         dc_dir = "home_win" if dc["home_win"] > dc["draw"] and dc["home_win"] > dc["away_win"] else \
                  ("draw" if dc["draw"] >= dc["away_win"] else "away_win")
-        pick_dir = "home_win" if probs["home_win"] > probs["away_win"] else "away_win"
+        # 推荐方向 = 三项概率取最大（平局也必须是候选，不能只在家胜/客胜里二选一）
+        pick_dir = max(("home_win", "draw", "away_win"), key=lambda k: probs[k])
         div = self.rules.mark_divergence(elo_dir, dc_dir, pick_dir, match_id,
                                          elo_home_p=res["elo"]["home_win"],
                                          dc_home_p=dc["home_win"])
@@ -254,11 +271,22 @@ class PredictionPipeline:
         self.rules.track_round_seq(away_code, round_no, match_id)
 
         if stage == "确认版" and confirm_probs is not None:
-            note = ("确认版复算：按伤病偏移量调整 DC，主概率较初版有变化。"
-                    + ("含临场缺阵信息。" if not no_injury_data else ""))
+            note = (f"确认版复算：伤病偏移 主队{inj_shift['home']:.2f}／客队{inj_shift['away']:.2f}（DC 攻击折扣口径）。"
+                    f"主 {base_probs['home_win']:.1%}→{confirm_probs['home_win']:.1%}、"
+                    f"平 {base_probs['draw']:.1%}→{confirm_probs['draw']:.1%}、"
+                    f"客 {base_probs['away_win']:.1%}→{confirm_probs['away_win']:.1%}。")
+            if abs(inj_shift["home"] - inj_shift["away"]) < 0.03 and inj_shift["home"] > 0:
+                note += "两队伤病量近似对称，净影响本身就小（属对称抵消，不是没生效）。"
         else:
             note = div["note_prefix"] + ("无伤病数据，输出基准概率。" if no_injury_data
                                          else "临场缺阵或前场创造力缺失。")
+        # 推荐方向与最可能比分方向不一致时明示（避免"推荐主胜却给 1:1"的观感矛盾）
+        if res.get("score_top2"):
+            top1 = res["score_top2"][0]["score"]
+            g1, g2 = (int(x) for x in top1.split(":"))
+            top_dir = "home_win" if g1 > g2 else ("away_win" if g1 < g2 else "draw")
+            if top_dir != pick_dir:
+                note += f"（注：最可能比分 {top1} 与推荐方向不一致，比分仅作参考）"
         # 疲劳/欧战前置信息（跨赛事分析，UI 醒目标记）
         fatigue_info = {
             "home_rest_days": f_home.get("rest_days"),
@@ -307,7 +335,9 @@ class PredictionPipeline:
             "injury_shift": inj_shift,
             "luck": luck_info,
             "score_top2": res["score_top2"],
-            "pick": (home if pick_dir == "home_win" else away) + "胜",
+            "pick": {"home_win": f"{home}胜", "away_win": f"{away}胜", "draw": "平局"}[pick_dir],
+            "pick_dir": pick_dir,
+            "pick_prob": round(probs[pick_dir], 3),
             "handicap_direction": {"line": f"{away} -0.5", "caution": "中高"},
             "confidence": confidence,
             "risk_note": note,
@@ -316,6 +346,7 @@ class PredictionPipeline:
             "model_breakdown": {"elo_home": round(res["elo"]["home_win"], 3),
                                 "elo_draw": round(res["elo"]["draw"], 3),
                                 "elo_away": round(res["elo"]["away_win"], 3),
+                                "gbm_trust": res.get("gbm_trust", 1.0),
                                 "dc_score_top2": [s["score"] for s in res["score_top2"]]},
         }
 
@@ -326,7 +357,12 @@ class PredictionPipeline:
             if confirm_probs is not None:
                 # 手动伤病驱动的复算保留为确认版，但如实标注为赛前48h窗口外预览
                 card["stage"] = "确认版"
-                card["risk_note"] += "（赛前48h窗口尚未进入，本为复算预览）"
+                card["risk_note"] += "（赛前48h窗口外，本为复算预览）"
+            elif no_injury_data:
+                # 用户选了确认版：本场没有录入伤病，概率与初版相同，但仍标确认版并在卡片上说明，
+                # 避免同一批卡片阶段标签不一致（"阶段标签未联动"的根因之一）
+                card["stage"] = "确认版"
+                card["risk_note"] += "（本场未录入伤病，概率与初版一致）"
             else:
                 card["stage"] = "初版"
         return card
