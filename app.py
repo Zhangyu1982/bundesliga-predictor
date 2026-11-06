@@ -639,9 +639,25 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
     if ss["stage"] == "终极版" and not result.get("comp_unavailable"):
         n_lu = sum(1 for c in cards if (c.get("lineup") or {}).get("available"))
         if n_lu == 0:
-            st.warning("⚠️ 本轮**没有任何一场拿到官方首发**（ESPN 在本场开球前约 60 分钟才填名单）。"
-                       "已按无首发回退：仅用上面的手动录入 / 基准概率，未凭空推断谁缺阵。"
-                       "请在开球前 1 小时内再点一次。")
+            from data.lineup import minutes_to_kickoff
+            _next = None
+            for _c in cards:
+                _m = minutes_to_kickoff(_c.get("kickoff") or "")
+                if _m is not None and _m > 0 and (_next is None or _m < _next[0]):
+                    _next = (_m, _c)
+            if _next:
+                _m, _c = _next
+                _when = (f"约 {_m/60:.1f} 小时（{int(_m)} 分钟）" if _m >= 60
+                         else f"{int(_m)} 分钟")
+                st.warning(
+                    f"⏳ **官方首发还没出，现在点还太早。** 最近一场是 {_c['home_team']} vs {_c['away_team']}，"
+                    f"距开球还有**{_when}**；ESPN 一般要等到开球前 60 分钟内才填名单。\n\n"
+                    "已按无首发回退：当前仅用手动录入 / 基准概率，未凭空推断谁缺阵。"
+                    f"请在开球前 1 小时内再点一次。")
+            else:
+                st.warning("⚠️ 本轮**没有任何一场拿到官方首发**（ESPN 在开球前约 60 分钟才填名单）。"
+                           "已按无首发回退：仅用上面的手动录入 / 基准概率，未凭空推断谁缺阵。"
+                           "请在开球前 1 小时内再点一次。")
         elif n_lu < len(cards):
             st.success(f"✅ 已用官方首发反推 **{n_lu}/{len(cards)}** 场；其余 {len(cards)-n_lu} 场官方首发尚未公布，按回退处理。")
         else:
