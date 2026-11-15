@@ -16,7 +16,7 @@ from data.historical_data import CODE2ENG
 from data.cross_competition import FatigueEngine, CrossElo
 from data.euro_fetch import fetch_current_euro
 
-VERSION = "p1.3"
+VERSION = "p1.4"
 
 # 比分口径：推荐方向取的是主/平/客三个"桶"里概率最高的一个（桶概率 = 该方向所有比分的和），
 # 而"最可能比分"取的是三十多个单格里最大的一个，两者量纲不同，因此可能落在不同方向。
@@ -57,6 +57,54 @@ def score_line_for(card: dict) -> str:
     pick_name = card.get("pick") or _DIR_ZH.get(pick_dir, "推荐方向")
     return (f"全场最高 {fmt(top1['score'], top1['prob'])}"
             f" · 方向内最可能（{pick_name}）{fmt(sbd['score'], sbd['prob'])}")
+
+
+# 轮次口径：选择器的"第一选项"跟着最新轮次走，免得每周手动翻下拉框。
+MAX_ROUND = 34
+_FINISHED_STATUS = {"FINISHED", "AWARDED"}
+
+
+def current_round_from_matches(matches) -> int | None:
+    """赛程 → 当前轮次：最早一轮仍有未结束比赛的那一轮；整季都打完则返回最大轮次 +1。
+    赛程行里没有 matchday 字段时返回 None（由 latest_round 兜底）。"""
+    rounds: dict[int, bool] = {}
+    for m in matches or []:
+        md = m.get("matchday")
+        try:
+            md = int(md)
+        except (TypeError, ValueError):
+            continue
+        done = str(m.get("status") or "").upper() in _FINISHED_STATUS
+        rounds[md] = rounds.get(md, True) and done
+    if not rounds:
+        return None
+    pending = [r for r, all_done in rounds.items() if not all_done]
+    return min(pending) if pending else max(rounds) + 1
+
+
+def latest_round(matches, recorded_rounds=()) -> int | None:
+    """最新轮次：赛程优先；赛程拿不到时用已录入赛果的最大轮次 +1（录入的都是打完的轮次）。"""
+    cr = current_round_from_matches(matches)
+    if cr:
+        return cr
+    nums = []
+    for r in recorded_rounds or ():
+        try:
+            nums.append(int(r))
+        except (TypeError, ValueError):
+            continue
+    return max(nums) + 1 if nums else None
+
+
+def round_options(latest: int | None) -> list[int]:
+    """下拉选项：最新轮次排第一，其后按轮次倒序，历史轮次都能回看。"""
+    top = MAX_ROUND
+    if latest is not None:
+        try:
+            top = max(1, min(MAX_ROUND, int(latest)))
+        except (TypeError, ValueError):
+            top = MAX_ROUND
+    return list(range(top, 0, -1))
 
 
 def _parse_dt(s: str):

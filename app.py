@@ -8,7 +8,7 @@
 部署：Streamlit Cloud，main file = app.py。
 """
 import streamlit as st
-from pipeline import PredictionPipeline, score_line_for
+from pipeline import PredictionPipeline, score_line_for, latest_round, round_options
 from data.injury_fetch import (fetch_all_candidates, _live_fetch_candidates,
                                load_backup, save_backup)
 from data.timeutil import fmt_local, age_hours  # 时间口径：存 UTC，展示转北京时间
@@ -17,7 +17,7 @@ DISCLAIMER = ("本系统输出为概率推演，不构成投注建议。比分 T
               "伤病与国家队负荷在赛前 48 小时仍可能显著变动，初版与确认版之间的差异是系统的设计特性，不是缺陷。")
 
 
-BUILD = "2026-11-15 11:46"   # 部署自证：每次部署改这一行
+BUILD = "2026-11-15 12:38"   # 部署自证：每次部署改这一行
 
 
 from config import IMPORTANCE_LEVELS
@@ -250,7 +250,7 @@ if uncal:
 
 # ================= 交互（st.session_state 状态切换） =================
 ss = st.session_state
-ss.setdefault("round", 9)
+ss.setdefault("round", None)   # 默认值不写死：下面按最新轮次自动取
 ss.setdefault("stage", "初版")
 ss.setdefault("competition", "BL1")
 ss.setdefault("manual_injuries", "")
@@ -465,9 +465,29 @@ comp_labels = {k: f"{COMPETITIONS[k]['name']} · {COMPETITIONS[k]['note']}" for 
 comp_sel = st.radio("赛事", list(comp_labels.keys()), index=0, format_func=lambda k: comp_labels[k])
 ss["competition"] = comp_sel
 
+# ---------- 轮次默认：第一选项自动跟到最新轮次（不用每周手动翻下拉框） ----------
+# 最新轮次口径：赛程里最早一轮还没打完的那轮；整季都打完则下一轮；赛程拿不到时用已录入赛果最大轮次 +1。
+_r_fixtures = []
+try:
+    if hasattr(pipe.provider, "fetch_competition_matches"):
+        _r_fixtures = pipe.provider.fetch_competition_matches("BL1") or []
+except Exception:
+    _r_fixtures = []
+try:
+    from data.live_results import load_live_results as _load_lr
+    _r_records = _load_lr()
+except Exception:
+    _r_records = []
+_r_latest = latest_round(_r_fixtures, [x.get("round_no") for x in _r_records])
+_r_opts = round_options(_r_latest)
+if ss.get("round") not in _r_opts:
+    ss["round"] = _r_latest if _r_latest in _r_opts else _r_opts[0]
+
 col_r, col_s = st.columns([2, 1])
 with col_r:
-    r = st.selectbox("选择轮次", range(1, 35), index=ss["round"] - 1)
+    r = st.selectbox("选择轮次", _r_opts,
+                     index=_r_opts.index(ss["round"]) if ss["round"] in _r_opts else 0,
+                     format_func=lambda x: f"第 {x} 轮" + ("（最新）" if x == _r_latest else ""))
     ss["round"] = r
 with col_s:
     stage_sel = st.radio("阶段", ["初版", "确认版", "⚡ 终极版（首发反推）"], horizontal=True,

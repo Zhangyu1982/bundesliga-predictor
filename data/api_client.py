@@ -222,6 +222,7 @@ class LiveFootballDataProvider(_CachedProvider):
                 "home_code": home_code, "away_code": away_code,
                 "kickoff": m.get("utcDate", ""),
                 "status": m.get("status", ""),
+                "matchday": m.get("matchday"),   # 轮次选择器默认值用（最新轮次口径）
                 "score": m.get("score", {}),
                 "stage": "初版",
                 "last_updated": utc_now_iso(),
