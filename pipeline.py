@@ -16,7 +16,47 @@ from data.historical_data import CODE2ENG
 from data.cross_competition import FatigueEngine, CrossElo
 from data.euro_fetch import fetch_current_euro
 
-VERSION = "p1.2"
+VERSION = "p1.3"
+
+# 比分口径：推荐方向取的是主/平/客三个"桶"里概率最高的一个（桶概率 = 该方向所有比分的和），
+# 而"最可能比分"取的是三十多个单格里最大的一个，两者量纲不同，因此可能落在不同方向。
+# 为避免"推荐主胜却只显示 1:1"的观感矛盾，卡片同时给出两个数：全场最高 + 方向内最可能。
+_DIR_ZH = {"home_win": "主胜", "draw": "平局", "away_win": "客胜"}
+
+
+def _score_dir(score: str) -> str:
+    """比分串 → 所属方向（H/D/A 三桶）。"""
+    g1, g2 = (int(x) for x in str(score).split(":"))
+    return "home_win" if g1 > g2 else ("away_win" if g1 < g2 else "draw")
+
+
+def direction_top_scores(matrix: dict) -> dict:
+    """比分矩阵 {(主,客): p} → 主/平/客三个方向各自概率最高的比分。
+    纯展示口径，不改变任何概率与模型。"""
+    best: dict = {}
+    for (i, j), p in matrix.items():
+        d = "home_win" if i > j else ("away_win" if i < j else "draw")
+        if d not in best or p > best[d][1]:
+            best[d] = (f"{i}:{j}", p)
+    return {d: {"score": s, "prob": round(p, 3)} for d, (s, p) in best.items()}
+
+
+def score_line_for(card: dict) -> str:
+    """卡片比分文案：方向内最可能与全场最高并列；两者相同时只显示一个。"""
+    top2 = card.get("score_top2") or []
+    if not top2:
+        return "最可能比分 —"
+    top1 = top2[0]
+    fmt = lambda s, p: f"{s}（{p:.1%}）"   # noqa: E731
+    pick_dir = card.get("pick_dir")
+    sbd = (card.get("score_by_dir") or {}).get(pick_dir) if pick_dir else None
+    if not sbd:
+        return f"最可能比分 {fmt(top1['score'], top1['prob'])}"
+    if sbd["score"] == top1["score"]:
+        return f"最可能比分 {fmt(top1['score'], top1['prob'])}（方向内最高）"
+    pick_name = card.get("pick") or _DIR_ZH.get(pick_dir, "推荐方向")
+    return (f"全场最高 {fmt(top1['score'], top1['prob'])}"
+            f" · 方向内最可能（{pick_name}）{fmt(sbd['score'], sbd['prob'])}")
 
 
 def _parse_dt(s: str):
@@ -109,6 +149,7 @@ class PredictionPipeline:
             # 修复：跨赛事没有可靠的平局模型，不再伪造 draw=away 的假三元组
             "elo": {"home_win": win_elo, "draw": None, "away_win": 1 - win_elo},
             "score_top2": [{"score": f"{i}:{j}", "prob": round(p, 3)} for (i, j), p in top2],
+            "score_by_dir": direction_top_scores(mat),
             "lam": {"home": round(lam_h, 2), "away": round(lam_a, 2)},
         }
 
@@ -155,6 +196,7 @@ class PredictionPipeline:
             "fused": fused, "elo": elo, "dc": dc, "gbm": gbm,
             "gbm_trust": round(trust, 3),
             "score_top2": [{"score": f"{i}:{j}", "prob": round(p, 3)} for (i, j), p in top2],
+            "score_by_dir": direction_top_scores(matrix),
         }
 
     # ---------------- 单场预测（含确认版闸门 + 无伤病标注 + 疲劳/跨赛事） ----------------
@@ -367,13 +409,12 @@ class PredictionPipeline:
         else:
             note = div["note_prefix"] + ("无伤病数据，输出基准概率。" if no_injury_data
                                          else "临场缺阵或前场创造力缺失。")
-        # 推荐方向与最可能比分方向不一致时明示（避免"推荐主胜却给 1:1"的观感矛盾）
+        # 全场最高比分落在非推荐方向时明示，并指向方向内最可能比分（两口径并列，见 score_line_for）
         if res.get("score_top2"):
             top1 = res["score_top2"][0]["score"]
-            g1, g2 = (int(x) for x in top1.split(":"))
-            top_dir = "home_win" if g1 > g2 else ("away_win" if g1 < g2 else "draw")
-            if top_dir != pick_dir:
-                note += f"（注：最可能比分 {top1} 与推荐方向不一致，比分仅作参考）"
+            if _score_dir(top1) != pick_dir:
+                note += (f"（注：全场最高比分 {top1} 落在{_DIR_ZH.get(_score_dir(top1), '其他方向')}，"
+                         f"已另列{_DIR_ZH.get(pick_dir, '推荐方向')}方向内最可能比分）")
         # 疲劳/欧战前置信息（跨赛事分析，UI 醒目标记）
         fatigue_info = {
             "home_rest_days": f_home.get("rest_days"),
@@ -439,6 +480,7 @@ class PredictionPipeline:
             "lineup": lineup_info,
             "luck": luck_info,
             "score_top2": res["score_top2"],
+            "score_by_dir": res.get("score_by_dir") or {},
             "pick": {"home_win": f"{home}胜", "away_win": f"{away}胜", "draw": "平局"}[pick_dir],
             "pick_dir": pick_dir,
             "pick_prob": round(probs[pick_dir], 3),
@@ -761,6 +803,7 @@ class PredictionPipeline:
             "national_team_factor": {"active": False, "home": 1.0, "away": 1.0},
             "probabilities": {k: round(v, 3) for k, v in probs.items()},
             "score_top2": res["score_top2"],
+            "score_by_dir": res.get("score_by_dir") or {},
             "pick": "基准", "handicap_direction": {"line": "—", "caution": "—"},
             "confidence": "低", "risk_note": "该轮暂无比赛数据，输出 GBM→DC 兜底基准概率。",
             "data_availability": "无数据", "confirm_blocked": False,

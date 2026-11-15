@@ -8,7 +8,7 @@
 部署：Streamlit Cloud，main file = app.py。
 """
 import streamlit as st
-from pipeline import PredictionPipeline
+from pipeline import PredictionPipeline, score_line_for
 from data.injury_fetch import (fetch_all_candidates, _live_fetch_candidates,
                                load_backup, save_backup)
 from data.timeutil import fmt_local, age_hours  # 时间口径：存 UTC，展示转北京时间
@@ -17,7 +17,7 @@ DISCLAIMER = ("本系统输出为概率推演，不构成投注建议。比分 T
               "伤病与国家队负荷在赛前 48 小时仍可能显著变动，初版与确认版之间的差异是系统的设计特性，不是缺陷。")
 
 
-BUILD = "2026-11-07 01:05"   # 部署自证：每次部署改这一行
+BUILD = "2026-11-15 11:46"   # 部署自证：每次部署改这一行
 
 
 from config import IMPORTANCE_LEVELS
@@ -138,7 +138,7 @@ def _build_explanation(c: dict, comp: str) -> str:
     if lk.get("away_rebound"):
         parts.append(f"📈 {c['away_team']} 进攻端触底反弹（近5场射正高但进球少，gap {lk['away_gap']}）")
     if c.get("score_top2"):
-        parts.append(f"最可能比分 {c['score_top2'][0]['score']}")
+        parts.append(score_line_for(c))
     if comp == "CL":
         parts.append("（欧冠跨赛事 Elo 推演）")
     return "；".join(parts) + "。"
@@ -713,21 +713,20 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
         st.markdown("### 📋 本轮推荐速览（胜平负 + 推荐比分）")
         for idx, c in enumerate(cards, 1):
             p = c["probabilities"]
-            top = c["score_top2"][0]["score"] if c.get("score_top2") else "—"
             pick = c["pick"]
             with st.container(border=True):
                 hl, hr = st.columns([3, 1])
                 hl.markdown(f"**{idx}. {c['home_team']} vs {c['away_team']}**")
                 hr.markdown(f"阶段 `{c['stage']}`",
                             help="初版=基准；确认版=含伤病复算；终极版=赛前官方首发反推")
-                st.markdown(f"推荐 **{pick}** · 最可能比分 `{top}`")
+                st.markdown(f"推荐 **{pick}** · {score_line_for(c)}")
                 st.progress(p["home_win"], text=f"主胜 {p['home_win']:.0%}")
                 st.progress(p["draw"], text=f"平局 {p['draw']:.0%}")
                 st.progress(p["away_win"], text=f"客胜 {p['away_win']:.0%}")
                 if c.get("no_history_teams"):
                     st.caption("⚠️ " + "、".join(c["no_history_teams"])
                                + " 在模型里没有历史参数，按联赛平均建模（不代表真实强弱）")
-        st.caption("胜/平/负为概率，推荐取三者概率最高的一项（平局也参与比较）；最可能比分取 Top1（分布最集中区域），与推荐方向可能不同。点开下方卡片可看伤病/解释等细节。")
+        st.caption("胜/平/负为概率，推荐取三者概率最高的一项（平局也参与比较）；比分并列两个口径：**全场最高**是三十多个比分格里概率最大的那个，**方向内最可能**是推荐方向（胜/平/负）内部概率最大的比分。两者量纲不同（方向是多个比分之和），因此可能落在不同方向，这不代表矛盾。点开下方卡片可看伤病/解释等细节。")
 
     # 确认版被拦截的整体提示
     blocked = [c for c in cards if c.get("confirm_blocked")]
@@ -861,6 +860,9 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
                             + ("（首发反推 / R2 口径，未标定）" if c.get("stage") == "终极版"
                                else "（R2 injury_shift，未标定）"))
             st.markdown(f"**比分 Top2**　" + "　".join(f"`{s['score']}`({s['prob']})" for s in c["score_top2"]))
+            _sbd = (c.get("score_by_dir") or {}).get(c["pick_dir"])
+            if _sbd:
+                st.markdown(f"**方向内最可能比分**　`{_sbd['score']}`（{_sbd['prob']:.1%}，{c['pick']}方向内最高）")
             st.markdown(f"**让球**　`{c['handicap_direction']['line']}` · 谨慎度 `{c['handicap_direction']['caution']}`")
             st.markdown(f"**数据**　{c['data_availability']} · 伤病 "
                         f"主缺阵[{_fmt_inj_colored(c['injuries'].get('home_key_out',[]))}] / "
