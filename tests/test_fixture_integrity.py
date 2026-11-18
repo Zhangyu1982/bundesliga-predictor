@@ -88,9 +88,16 @@ def test_fixtures_origin_marks_seed_fallback():
     assert prov._last_round_source == "seed_fallback"
 
 
-def test_pipeline_meta_carries_fixtures_source(monkeypatch=None):
+def test_pipeline_meta_carries_fixtures_source():
+    """强制实时源不可用 → pipeline 的 meta 必须把来源标成 seed_fallback。"""
+    from data.api_client import ProviderUnavailableError
     from pipeline import PredictionPipeline
     p = PredictionPipeline()
-    p.provider._last_round_source = "seed_fallback"
+
+    def _boom(*a, **k):
+        raise ProviderUnavailableError("quota exhausted (test)")
+
+    p.provider._call = _boom
     fx, meta = p.fetch_round(10)
     assert meta.get("fixtures_source") == "seed_fallback"
+    assert fx, "兜底应返回示例赛程（同时被标记，不得冒充实时）"
