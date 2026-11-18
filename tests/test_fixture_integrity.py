@@ -74,7 +74,9 @@ def test_predict_round_blocks_cards_when_coverage_missing(monkeypatch=None):
     res = p.predict_round(10, stage="初版")
     assert res["cards"] == [], "覆盖不一致时不得出卡"
     assert res["coverage_error"]["missing"] == ["ZZZ"]
-    assert "赛程名单与模型覆盖不一致" in res["coverage_error"]["message"]
+    # 两条拦截理由都算合格：缺参数（"覆盖不一致"）或名单外球队（"与本季基线不一致"）
+    assert ("覆盖不一致" in res["coverage_error"]["message"]
+            or "本季基线不一致" in res["coverage_error"]["message"])
 
 
 def test_fixtures_origin_marks_seed_fallback():

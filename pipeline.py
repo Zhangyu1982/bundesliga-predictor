@@ -16,7 +16,7 @@ from data.historical_data import CODE2ENG
 from data.cross_competition import FatigueEngine, CrossElo
 from data.euro_fetch import fetch_current_euro
 
-VERSION = "p1.8"
+VERSION = "p1.9"
 
 # 比分口径：推荐方向取的是主/平/客三个"桶"里概率最高的一个（桶概率 = 该方向所有比分的和），
 # 而"最可能比分"取的是三十多个单格里最大的一个，两者量纲不同，因此可能落在不同方向。
@@ -844,6 +844,21 @@ class PredictionPipeline:
             _cover = {code for code, eng in CODE2ENG.items()
                       if eng in getattr(self._bundle, "dc_attack", {})}
             _cov = round_coverage(fixtures, _cover)
+            # 与本季基线名单比对：名单外球队 = 跑错批次/串季的直接证据（比"缺参数"更早拦住）
+            try:
+                from data.season_roster import SEASON_ROSTER_2627 as _ROSTER
+            except Exception:
+                _ROSTER = {}
+            if _ROSTER:
+                _round_codes = {f.get(k) for f in fixtures for k in ("home_code", "away_code")} - {None}
+                _outside = sorted(_round_codes - set(_ROSTER))
+                _absent = sorted(set(_ROSTER) - _round_codes)
+                if _outside or _absent:
+                    _cov = {"ok": False, "missing": sorted(_cov.get("missing") or []),
+                            "codes": sorted(_round_codes),
+                            "message": "赛程名单与本季基线不一致（名单外 {}；名单缺 {}）".format(
+                                "/".join(_outside) or "无", "/".join(_absent) or "无"),
+                            "roster_outside": _outside, "roster_absent": _absent}
             if not _cov["ok"]:
                 meta["coverage_error"] = _cov
                 return {"round": round_no, "competition": competition, "meta": meta,

@@ -42,3 +42,35 @@ def test_round_coverage_passes_for_18_teams_with_promoted():
              "SVW", "FCA", "TSG", "FCU", "HSV", "KOE", "ELV", "PAD"]
     cov = round_coverage([{"home_code": c, "away_code": "SCH"} for c in codes], cover)
     assert set(codes) - set(cov["codes"]) == set()
+
+
+def test_gate_blocks_wrong_batch_from_seed_fallback():
+    """示例/串季赛程的 18 队与本赛季基线不一致 → 必须被拦住，不出卡。"""
+    from pipeline import PredictionPipeline
+    p = PredictionPipeline()
+    bad = [{"match_id": f"s{i}", "home_code": h, "away_code": a, "kickoff": "2026-11-22T14:30:00Z"}
+           for i, (h, a) in enumerate([("BAY", "BMG"), ("DOR", "BOC"), ("STP", "HDH"), ("WOB", "HSV"),
+                                       ("LEV", "FCA"), ("SCF", "STU"), ("SGE", "SVW"), ("FCU", "TSG"),
+                                       ("MAI", "RBL")])]
+    p.fetch_round = lambda r: (bad, {"freshness": {}, "realtime_injury_available": False,
+                                     "round_has_data": True, "round_no": 10})
+    res = p.predict_round(10, stage="初版")
+    assert res["cards"] == []
+    assert "本季基线不一致" in res["coverage_error"]["message"]
+    assert set(res["coverage_error"]["roster_outside"]) == {"BOC", "STP", "HDH", "WOB"}
+
+
+def test_gate_passes_real_round_10():
+    from pipeline import PredictionPipeline
+    p = PredictionPipeline()
+    from data.api_client import team_zh
+    fx = [{"match_id": f"r{i}", "home_code": h, "away_code": a, "kickoff": "2026-11-21T14:30:00Z",
+           "home_team": team_zh(h), "away_team": team_zh(a)}
+          for i, (h, a) in enumerate([("BAY", "KOE"), ("FCU", "RBL"), ("LEV", "PAD"), ("BMG", "DOR"),
+                                      ("SGE", "TSG"), ("ELV", "SCF"), ("SCH", "STU"), ("FCA", "MAI"),
+                                      ("SVW", "HSV")])]
+    p.fetch_round = lambda r: (fx, {"freshness": {}, "realtime_injury_available": False,
+                                    "round_has_data": True, "round_no": 10})
+    res = p.predict_round(10, stage="初版")
+    assert res.get("coverage_error") is None
+    assert len(res["cards"]) == 9
