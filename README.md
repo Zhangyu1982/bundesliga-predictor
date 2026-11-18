@@ -59,6 +59,12 @@ FOOTBALL_DATA_TOKEN=xxx streamlit run app.py --server.headless true --server.por
 ```
 首次运行自动训练并缓存 `artifacts/models.pkl`；之后快速加载。
 
+> **产物不要跨平台复制**：`models.pkl` 里的 XGBoost booster 依赖本机 xgboost 二进制，
+> 在 Windows 上加载 Linux 训练的产物会报 `XGBoostError: input stream corrupted`。
+> 两个环境各自 `trainer.train(force=True)` 生成自己的产物即可（同数据重训结果一致：
+> Elo_brier=0.1591 / DC_nll=2774，核心 DC 参数逐队相同）；加载失败时 `train()` 已自动重训，
+> 但**不要把本机重训后的 pkl 反向 push**，否则 Linux/云端会失效。
+
 ## 2.2 部署原理（Streamlit Cloud）
 - 仓库：`github.com/Zhangyu1982/bundesliga-predictor`（已公开）。
 - **改代码 → commit → push main → Streamlit Cloud 自动重部署，公网链接不变**。
