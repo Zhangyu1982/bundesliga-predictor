@@ -21,10 +21,50 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from data_stores.bias_store import BiasStore, DB_PATH  # noqa: E402
 from data.live_results import load_live_results, save_live_results  # noqa: E402
+
+
+def parse_kickoff(text: str) -> datetime:
+    """解析开赛时间：必须带时区，否则无法自证"哪天几点、哪个赛季"。"""
+    dt = datetime.fromisoformat(text.strip())
+    if dt.tzinfo is None:
+        raise ValueError("--kickoff 必须带时区（如 2026-11-07T22:30:00+08:00）")
+    return dt
+
+
+def season_label(dt: datetime) -> str:
+    """按开赛时间推赛季号，跨年赛季从 7 月起算：2026-11 → 2627，2027-05 → 2627。"""
+    y = dt.year
+    start = y if dt.month >= 7 else y - 1
+    return f"{start % 100:02d}{(start + 1) % 100:02d}"
+
+
+def derive_matchday(kickoff: datetime, home: str, away: str, fixtures) -> int | None:
+    """在赛程里按"对阵 + 开赛日期"反查轮次，不写死轮号。"""
+    for f in fixtures or []:
+        try:
+            fk = parse_kickoff(str(f.get("kickoff")))
+        except Exception:
+            continue
+        if not fk:
+            continue
+        if (f.get("home") or "").strip() != home.strip():
+            continue
+        if (f.get("away") or "").strip() != away.strip():
+            continue
+        if abs((fk - kickoff).total_seconds()) <= 36 * 3600:
+            return f.get("matchday")
+    return None
+
+
+def fixture_source(endpoint: str, season: str, matchday: int | None, fetched_at: str) -> dict:
+    """一条记录自证"从哪个端点、哪一季、哪一轮、什么时候取的"。"""
+    return {"endpoint": endpoint, "season": season,
+            "matchday": matchday, "fetched_at": fetched_at}
 
 
 def _auto_pred_hit(pick: str | None, ftr: str | None) -> int:
@@ -37,6 +77,7 @@ def _auto_pred_hit(pick: str | None, ftr: str | None) -> int:
 
 def record(rec: dict, db_path: str = DB_PATH, live_path: str | None = None) -> int:
     """写一条真实比对记录；同时写入 bias.db 与 live_results.json（入库）。"""
+    rec.setdefault("pred_home", None)
     rec.setdefault("pred_draw", None)
     rec.setdefault("pred_away", None)
     rec.setdefault("bias_streak", 0)
@@ -55,8 +96,10 @@ def record(rec: dict, db_path: str = DB_PATH, live_path: str | None = None) -> i
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="记录一场真实比赛结果到 R1 偏差数据库")
-    ap.add_argument("--season", required=True, help="真实赛季，如 2627")
-    ap.add_argument("--round", type=int, required=True, help="赛季内轮次")
+    ap.add_argument("--kickoff", required=True,
+                    help="开赛时间（ISO 带时区，如 2026-11-21T22:30:00+08:00）；必填，用于自证赛季与轮次")
+    ap.add_argument("--season", default=None, help="赛季，如 2627；缺省由 --kickoff 派生")
+    ap.add_argument("--round", type=int, default=None, help="轮次；缺省按 --kickoff + 对阵反查赛程")
     ap.add_argument("--match-id", required=True)
     ap.add_argument("--home", required=True)
     ap.add_argument("--away", required=True)
@@ -76,9 +119,37 @@ def main() -> None:
                     help="本场预测时的伤病偏移（客队）")
     args = ap.parse_args()
 
+    kickoff_dt = parse_kickoff(args.kickoff)
+    season = args.season or season_label(kickoff_dt)
+    round_no = args.round
+    source = None
+    if round_no is None:
+        try:
+            from pipeline import PredictionPipeline
+            pipe = PredictionPipeline()
+            fixtures = []
+            for r in range(1, 35):
+                try:
+                    fx, _ = pipe.fetch_round(r)
+                except Exception:
+                    continue
+                for m in fx:
+                    fixtures.append({"matchday": r, "kickoff": m.get("kickoff"),
+                                     "home": m.get("home_team"), "away": m.get("away_team")})
+            round_no = derive_matchday(kickoff_dt, args.home, args.away, fixtures)
+        except Exception:
+            round_no = None
+    if round_no is None:
+        raise SystemExit("无法从赛程反查轮次：请显式传 --round（今日配额可能已耗尽）")
+    source = fixture_source("/v4/competitions/BL1/matches?matchday={}".format(round_no),
+                            season, round_no,
+                            kickoff_dt.isoformat())
+
     rec = {
-        "season": args.season,
-        "round_no": args.round,
+        "season": season,
+        "round_no": round_no,
+        "kickoff": kickoff_dt.isoformat(),
+        "fixture_source": source,
         "match_id": args.match_id,
         "home": args.home,
         "away": args.away,
@@ -96,7 +167,7 @@ def main() -> None:
         "shift_away": args.shift_away,
     }
     n = record(rec)
-    print(f"已写入 {n} 条：{args.season} R{args.round} {args.home} vs {args.away} "
+    print(f"已写入 {n} 条：{season} R{round_no} {args.home} vs {args.away} "
           f"实际 {args.hg}-{args.ag} ({args.ftr}) · 预测首选 {args.pick} · 命中 "
           f"{_auto_pred_hit(args.pick, args.ftr)}")
 
