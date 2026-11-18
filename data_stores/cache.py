@@ -22,7 +22,8 @@ class Cache:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS cache ("
-            "match_id TEXT PRIMARY KEY, key TEXT, payload TEXT, ts TEXT)")
+            "match_id TEXT, key TEXT, payload TEXT, ts TEXT, "
+            "PRIMARY KEY(match_id, key))")
         # 每日配额记账：date + resource -> count
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS daily_quota ("
@@ -31,6 +32,25 @@ class Cache:
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS quota_state ("
             "resource TEXT PRIMARY KEY, remaining INT, reset_at REAL, updated_at TEXT)")
+        self._migrate_pk()
+        self.conn.commit()
+
+    def _migrate_pk(self) -> None:
+        """旧版 cache 表以 match_id 单列为主键：同一天写入第二个资源会覆盖第一个
+        （曾导致第 10 轮赛程被当日积分榜覆盖）。这里重建为 (match_id, key) 复合主键。"""
+        info = self.conn.execute("PRAGMA table_info(cache)").fetchall()
+        pk_cols = [r[1] for r in info if r[5] > 0]
+        if len(pk_cols) > 1:
+            return
+        rows = self.conn.execute("SELECT match_id, key, payload, ts FROM cache").fetchall()
+        self.conn.execute("ALTER TABLE cache RENAME TO cache_old")
+        self.conn.execute(
+            "CREATE TABLE cache ("
+            "match_id TEXT, key TEXT, payload TEXT, ts TEXT, "
+            "PRIMARY KEY(match_id, key))")
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO cache (match_id,key,payload,ts) VALUES (?,?,?,?)", rows)
+        self.conn.execute("DROP TABLE cache_old")
         self.conn.commit()
 
     # ---------- 基础键值缓存 ----------
