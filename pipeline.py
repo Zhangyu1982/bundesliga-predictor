@@ -8,6 +8,7 @@ P1 新增：灌入德甲历史 CSV 重训 Elo + Dixon-Coles + GBM（XGB+LGBM）�
 from __future__ import annotations
 import math
 from datetime import datetime
+from data.timeutil import season_label
 from config import (RULES, SEASON, ENSEMBLE_WEIGHTS, uncalibrated_thresholds,
                     FATIGUE_RULES, LUCK_REGRESSION, HOME_ADV)
 from schema import validate_probs, validate_stage_window
@@ -16,7 +17,7 @@ from data.historical_data import CODE2ENG
 from data.cross_competition import FatigueEngine, CrossElo
 from data.euro_fetch import fetch_current_euro
 
-VERSION = "p1.9"
+VERSION = "p2.0"
 
 # 比分口径：推荐方向取的是主/平/客三个"桶"里概率最高的一个（桶概率 = 该方向所有比分的和），
 # 而"最可能比分"取的是三十多个单格里最大的一个，两者量纲不同，因此可能落在不同方向。
@@ -191,6 +192,7 @@ class PredictionPipeline:
             "round_has_data": bool(fixtures),
             "round_no": round_no,
             "fixtures_source": getattr(self.provider, "_last_round_source", None),
+            "season": season_label(),          # 一条记录能自证"我属于哪一季"
         }
         return fixtures, meta
 

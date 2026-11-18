@@ -22,7 +22,7 @@ from config import DATA_SOURCES, LEAGUE, SEASON
 from data.seed_data import get_round_fixtures, seed_freshness, TEAMS
 from data.historical_data import load_seasons, team_last_state, CODE2ENG
 from data_stores.cache import Cache
-from data.timeutil import utc_now_iso  # 时区口径：存 UTC 带标记，展示转本地（见 data/timeutil.py）
+from data.timeutil import utc_now_iso, season_label as _season_label  # 时区口径：存 UTC 带标记，展示转本地（见 data/timeutil.py）
 
 
 # ---------- P2 队名归一化映射层：football-data.org 真实队名 → 种子 code ----------
@@ -142,7 +142,29 @@ class LiveFootballDataProvider(_CachedProvider):
             raise ProviderUnavailableError("football-data.org 需要 X-Auth-Token")
         return self.fetch_competition_round(LEAGUE, round_no)
 
-    def fetch_competition_round(self, comp: str, round_no: int) -> list[dict]:
+    # ---- 缓存 key 带 season（旧 key 只做一次回退读取，下一版删除）----
+    @staticmethod
+    def _round_resource(comp: str, round_no: int, season: str) -> str:
+        """缓存资源名：season 必须入 key，否则翻季时同轮次会读到上一季的赛程。"""
+        return f"round:{season}:{comp}:{round_no}"
+
+    def _cached_round(self, comp: str, round_no: int, season: str) -> dict | None:
+        """先读带 season 的新 key；未命中再看一次旧 key（round:comp:n）并顺手迁移。"""
+        hit = self._get_cached(self._round_resource(comp, round_no, season))
+        if hit is not None:
+            return hit | {"cached": True}
+        legacy = self._get_cached(f"round:{comp}:{round_no}")
+        if legacy is not None:
+            import logging
+            logging.getLogger(__name__).warning(
+                "[deprecation] 命中无 season 的旧缓存键 %s:%s:%s，已迁移到 %s；下一版将删除旧键",
+                self.resource_prefix, "round", f"{comp}:{round_no}",
+                self._round_resource(comp, round_no, season))
+            self._set_cached(self._round_resource(comp, round_no, season), legacy)
+            return legacy | {"cached": True, "legacy_key": True}
+        return None
+
+    def fetch_competition_round(self, comp: str, round_no: int, season: str | None = None) -> list[dict]:
         """按赛事拉取某一轮（德甲 BL1 / 欧冠 CL）。免费层 EL/DFB 403 → 抛 ProviderUnavailableError。"""
         if not self.token:
             raise ProviderUnavailableError("football-data.org 需要 X-Auth-Token")
@@ -150,9 +172,12 @@ class LiveFootballDataProvider(_CachedProvider):
             raise ProviderUnavailableError(
                 f"football-data.org 免费层无 {comp}（EL/DFB=403付费；欧协404不存在），仅 BL1/CL 可用")
         url = f"{self.base}/competitions/{comp}/matches"
+        season = season or _season_label()
+        pre = self._cached_round(comp, round_no, season)
         try:
-            data = self._call(f"round:{comp}:{round_no}", url, self._hdr(),
-                              {"matchday": round_no}, self._daily_limit)
+            data = pre if pre is not None else self._call(
+                self._round_resource(comp, round_no, season), url, self._hdr(),
+                {"matchday": round_no}, self._daily_limit)
         except (ProviderUnavailableError, requests.HTTPError, requests.RequestException):
             if comp == LEAGUE:
                 self._last_round_source = "seed_fallback"

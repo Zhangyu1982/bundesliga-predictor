@@ -86,3 +86,13 @@ def age_hours(raw, now=None, assume_tz=LOCAL_TZ):
     if ref.tzinfo is None:
         ref = ref.replace(tzinfo=timezone.utc)
     return (ref - d).total_seconds() / 3600.0
+
+
+def season_label(dt=None) -> str:
+    """从日期推出赛季标签（跨年制，7 月开新赛季）：2026-11 → "2627"，2026-05 → "2526"。"""
+    d = dt or datetime.now(timezone.utc)
+    if isinstance(d, str):
+        d = parse_any(d) or datetime.now(timezone.utc)
+    y = d.year
+    start = y if d.month >= 7 else y - 1
+    return f"{start % 100:02d}{(start + 1) % 100:02d}"
