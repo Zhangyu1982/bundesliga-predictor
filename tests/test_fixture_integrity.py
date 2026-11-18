@@ -90,9 +90,10 @@ def test_fixtures_origin_marks_seed_fallback():
 
 def test_pipeline_meta_carries_fixtures_source():
     """强制实时源不可用 → pipeline 的 meta 必须把来源标成 seed_fallback。"""
-    from data.api_client import ProviderUnavailableError
+    from data.api_client import LiveFootballDataProvider, ProviderUnavailableError
     from pipeline import PredictionPipeline
     p = PredictionPipeline()
+    p.provider = LiveFootballDataProvider(token="dummy")   # 显式用实时 provider，再打断它
 
     def _boom(*a, **k):
         raise ProviderUnavailableError("quota exhausted (test)")
