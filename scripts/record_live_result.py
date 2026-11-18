@@ -70,6 +70,10 @@ def main() -> None:
     ap.add_argument("--elo", default=None)
     ap.add_argument("--dc", default=None)
     ap.add_argument("--divergence", type=int, default=0)
+    ap.add_argument("--shift-home", type=float, default=None,
+                    help="本场预测时的伤病偏移（主队，DC 攻击折扣口径）；用于 P0-1 有效性回测")
+    ap.add_argument("--shift-away", type=float, default=None,
+                    help="本场预测时的伤病偏移（客队）")
     args = ap.parse_args()
 
     rec = {
@@ -88,6 +92,8 @@ def main() -> None:
         "elo_dir": args.elo,
         "dc_dir": args.dc,
         "divergence": args.divergence,
+        "shift_home": args.shift_home,
+        "shift_away": args.shift_away,
     }
     n = record(rec)
     print(f"已写入 {n} 条：{args.season} R{args.round} {args.home} vs {args.away} "

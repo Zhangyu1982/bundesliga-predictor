@@ -16,7 +16,7 @@ from data.historical_data import CODE2ENG
 from data.cross_competition import FatigueEngine, CrossElo
 from data.euro_fetch import fetch_current_euro
 
-VERSION = "p1.4"
+VERSION = "p1.5"
 
 # 比分口径：推荐方向取的是主/平/客三个"桶"里概率最高的一个（桶概率 = 该方向所有比分的和），
 # 而"最可能比分"取的是三十多个单格里最大的一个，两者量纲不同，因此可能落在不同方向。
@@ -105,6 +105,13 @@ def round_options(latest: int | None) -> list[int]:
         except (TypeError, ValueError):
             top = MAX_ROUND
     return list(range(top, 0, -1))
+
+
+def lambda_total_of(cards) -> float:
+    """复盘口径：λ 期望合计 = 各场 (λ主+λ客) 求和。
+    不能用 Top1 比分求和代替——后者是"最可能结果"而非期望进球，会系统性偏低。"""
+    return round(sum(float((c.get("lam") or {}).get("total") or 0.0)
+                     for c in cards or []), 1)
 
 
 def _parse_dt(s: str):
@@ -198,7 +205,8 @@ class PredictionPipeline:
             "elo": {"home_win": win_elo, "draw": None, "away_win": 1 - win_elo},
             "score_top2": [{"score": f"{i}:{j}", "prob": round(p, 3)} for (i, j), p in top2],
             "score_by_dir": direction_top_scores(mat),
-            "lam": {"home": round(lam_h, 2), "away": round(lam_a, 2)},
+            "lam": {"home": round(lam_h, 2), "away": round(lam_a, 2),
+                    "total": round(lam_h + lam_a, 2)},
         }
 
     def _probs_for(self, home_code: str, away_code: str,
@@ -240,9 +248,15 @@ class PredictionPipeline:
         fused = {k: v / s for k, v in fused.items()}
         matrix = b.dc_score_matrix(h, a, 8, home_disc + inj_shift_h, away_disc + inj_shift_a)
         top2 = sorted(matrix.items(), key=lambda kv: -kv[1])[:2]
+        # λ 期望：直接从展示矩阵的边际求，保证"展示的 λ"和"展示的比分格"同源（不改任何概率）
+        _tot = sum(matrix.values()) or 1.0
+        lam_h = sum(i * p for (i, _j), p in matrix.items()) / _tot
+        lam_a = sum(j * p for (_i, j), p in matrix.items()) / _tot
         return {
             "fused": fused, "elo": elo, "dc": dc, "gbm": gbm,
             "gbm_trust": round(trust, 3),
+            "lam": {"home": round(lam_h, 2), "away": round(lam_a, 2),
+                    "total": round(lam_h + lam_a, 2)},
             "score_top2": [{"score": f"{i}:{j}", "prob": round(p, 3)} for (i, j), p in top2],
             "score_by_dir": direction_top_scores(matrix),
         }
@@ -529,6 +543,7 @@ class PredictionPipeline:
             "luck": luck_info,
             "score_top2": res["score_top2"],
             "score_by_dir": res.get("score_by_dir") or {},
+            "lam": res.get("lam") or {},
             "pick": {"home_win": f"{home}胜", "away_win": f"{away}胜", "draw": "平局"}[pick_dir],
             "pick_dir": pick_dir,
             "pick_prob": round(probs[pick_dir], 3),
@@ -852,6 +867,7 @@ class PredictionPipeline:
             "probabilities": {k: round(v, 3) for k, v in probs.items()},
             "score_top2": res["score_top2"],
             "score_by_dir": res.get("score_by_dir") or {},
+            "lam": res.get("lam") or {},
             "pick": "基准", "handicap_direction": {"line": "—", "caution": "—"},
             "confidence": "低", "risk_note": "该轮暂无比赛数据，输出 GBM→DC 兜底基准概率。",
             "data_availability": "无数据", "confirm_blocked": False,

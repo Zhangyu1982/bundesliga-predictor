@@ -17,7 +17,7 @@ DISCLAIMER = ("本系统输出为概率推演，不构成投注建议。比分 T
               "伤病与国家队负荷在赛前 48 小时仍可能显著变动，初版与确认版之间的差异是系统的设计特性，不是缺陷。")
 
 
-BUILD = "2026-11-15 12:38"   # 部署自证：每次部署改这一行
+BUILD = "2026-11-18 19:55"   # 部署自证：每次部署改这一行
 
 
 from config import IMPORTANCE_LEVELS
@@ -740,6 +740,10 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
                 hr.markdown(f"阶段 `{c['stage']}`",
                             help="初版=基准；确认版=含伤病复算；终极版=赛前官方首发反推")
                 st.markdown(f"推荐 **{pick}** · {score_line_for(c)}")
+                _lam = c.get("lam") or {}
+                if _lam.get("total") is not None:
+                    st.caption(f"λ 期望：主 {_lam['home']} · 客 {_lam['away']} · 合计 {_lam['total']} 球"
+                               "（比分分布的中心，Top2 只是峰值格）")
                 st.progress(p["home_win"], text=f"主胜 {p['home_win']:.0%}")
                 st.progress(p["draw"], text=f"平局 {p['draw']:.0%}")
                 st.progress(p["away_win"], text=f"客胜 {p['away_win']:.0%}")
@@ -883,6 +887,16 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
             _sbd = (c.get("score_by_dir") or {}).get(c["pick_dir"])
             if _sbd:
                 st.markdown(f"**方向内最可能比分**　`{_sbd['score']}`（{_sbd['prob']:.1%}，{c['pick']}方向内最高）")
+            _lam = c.get("lam") or {}
+            if _lam.get("total") is not None:
+                st.markdown(f"**λ 期望**　主 `{_lam['home']}` · 客 `{_lam['away']}` · 合计 `{_lam['total']}`"
+                            "（期望进球是比分分布的中心，实际比分会围绕它波动，所以单个比分格的概率只有个位数到十几%）")
+            _sh = c.get("injury_shift") or {}
+            _lsh = c.get("lineup_shift") or {}
+            if any(_sh.get(k) for k in ("home", "away")) or any(_lsh.get(k) for k in ("home", "away")):
+                st.markdown("| 偏移口径 | 主队 | 客队 |\n|---|---|---|\n"
+                            f"| 伤病偏移（R2） | {float(_sh.get('home') or 0):.2f} | {float(_sh.get('away') or 0):.2f} |\n"
+                            f"| 首发偏移（P5） | {float(_lsh.get('home') or 0):.2f} | {float(_lsh.get('away') or 0):.2f} |")
             st.markdown(f"**让球**　`{c['handicap_direction']['line']}` · 谨慎度 `{c['handicap_direction']['caution']}`")
             st.markdown(f"**数据**　{c['data_availability']} · 伤病 "
                         f"主缺阵[{_fmt_inj_colored(c['injuries'].get('home_key_out',[]))}] / "
