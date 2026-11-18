@@ -96,6 +96,10 @@ def test_pipeline_meta_carries_fixtures_source():
     from pipeline import PredictionPipeline
     p = PredictionPipeline()
     p.provider = LiveFootballDataProvider(token="dummy")   # 显式用实时 provider，再打断它
+    # 隔离缓存：当天若已缓存过第 10 轮，会命中缓存而不触发降级（用例随环境红绿）
+    import tempfile, os
+    from data_stores.cache import Cache
+    p.provider.cache = Cache(os.path.join(tempfile.mkdtemp(), "cache.db"))
 
     def _boom(*a, **k):
         raise ProviderUnavailableError("quota exhausted (test)")
