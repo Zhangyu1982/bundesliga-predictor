@@ -17,7 +17,7 @@ DISCLAIMER = ("本系统输出为概率推演，不构成投注建议。比分 T
               "伤病与国家队负荷在赛前 48 小时仍可能显著变动，初版与确认版之间的差异是系统的设计特性，不是缺陷。")
 
 
-BUILD = "2026-11-18 19:55"   # 部署自证：每次部署改这一行
+BUILD = "2026-11-18 21:10"   # 部署自证：每次部署改这一行
 
 
 from config import IMPORTANCE_LEVELS
@@ -712,6 +712,27 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
     # 修复（P0）：cards 必须无条件绑定。原来只在 else 分支赋值，
     # comp_unavailable=True 时下面 `if ... and cards` 直接 NameError → 免费层赛事必崩。
     cards = result.get("cards") or []
+
+    # 出卡前校验未通过：队集合与模型覆盖不一致 → 不出卡（禁止均值兜底出正常卡）
+    if result.get("coverage_error"):
+        _cov = result["coverage_error"]
+        st.error(f"⛔ **{_cov['message']}**\n\n模型对缺项球队没有训练参数，若照常出卡会按联赛均值静默兜底、"
+                 "产生看似正常但不可用的预测。本轮**不出卡**，请稍后重取赛程，或先补齐这些球队的历史数据。")
+        st.caption(f"缺项：{'/'.join(_cov['missing'])} · 本轮队集合：{'/'.join(_cov['codes'])}")
+        cards = []
+
+    # 赛程指纹：同一轮重算时若上游改过赛程 → 旧卡作废，提示并已按新批次重算
+    _snap = result.get("fixture_snapshot") or {}
+    if _snap:
+        _key = f"_fixsnap_{ss.get('competition')}_{ss.get('round')}"
+        _old = st.session_state.get(_key)
+        from pipeline import snapshot_changed
+        if _old and snapshot_changed(_old, _snap):
+            st.warning(f"⚠️ **赛程已更新，旧卡作废**：本轮赛程指纹由 `{_old.get('payload_hash')}` 变为 "
+                       f"`{_snap.get('payload_hash')}`（上游改过对阵/开球时间），当前卡片已按新批次重算，"
+                       "请勿再使用旧截图。")
+        st.session_state[_key] = _snap
+
     if result.get("comp_unavailable"):
         st.warning(f"⛔ **{COMPETITIONS.get(ss['competition'], {}).get('name','该赛事')} 免费层不可用**："
                    f"{result.get('comp_note')}。请使用德甲(BL1)或欧冠(CL)。")

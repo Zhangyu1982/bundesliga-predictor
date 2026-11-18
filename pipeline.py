@@ -16,7 +16,7 @@ from data.historical_data import CODE2ENG
 from data.cross_competition import FatigueEngine, CrossElo
 from data.euro_fetch import fetch_current_euro
 
-VERSION = "p1.5"
+VERSION = "p1.6"
 
 # 比分口径：推荐方向取的是主/平/客三个"桶"里概率最高的一个（桶概率 = 该方向所有比分的和），
 # 而"最可能比分"取的是三十多个单格里最大的一个，两者量纲不同，因此可能落在不同方向。
@@ -105,6 +105,48 @@ def round_options(latest: int | None) -> list[int]:
         except (TypeError, ValueError):
             top = MAX_ROUND
     return list(range(top, 0, -1))
+
+
+def round_coverage(fixtures, cover_codes) -> dict:
+    """出卡前校验：本轮 18 个 code 是否都在模型覆盖集合内。
+
+    不覆盖 → 不出卡（否则会静默按联赛均值兜底，出 9 张看起来正常的错卡）。
+    """
+    codes = set()
+    for m in fixtures or []:
+        if m.get("home_code"):
+            codes.add(m["home_code"])
+        if m.get("away_code"):
+            codes.add(m["away_code"])
+    missing = sorted(codes - set(cover_codes or ()))
+    if not missing:
+        return {"ok": True, "missing": [], "codes": sorted(codes), "message": ""}
+    return {"ok": False, "missing": missing, "codes": sorted(codes),
+            "message": "赛程名单与模型覆盖不一致（缺 {}）".format("/".join(missing))}
+
+
+def fixture_fingerprint(fixtures, fetched_at: str | None = None) -> dict:
+    """赛程指纹：证明'这张卡是基于哪一版赛程算的'。哈希只看赛程内容，不看拉取时间。"""
+    import hashlib, json as _json
+    items, ids, codes = [], [], set()
+    for m in fixtures or []:
+        items.append([m.get("match_id"), m.get("home_code"), m.get("away_code"), m.get("kickoff")])
+        if m.get("match_id"):
+            ids.append(m["match_id"])
+        for k in ("home_code", "away_code"):
+            if m.get(k):
+                codes.add(m[k])
+    items.sort(key=lambda x: (str(x[0]), str(x[3] or "")))
+    payload = _json.dumps(items, ensure_ascii=False, sort_keys=True)
+    return {"event_ids": sorted(ids), "codes": sorted(codes),
+            "fetched_at": fetched_at, "payload_hash": hashlib.sha256(payload.encode()).hexdigest()[:16]}
+
+
+def snapshot_changed(old_snapshot, new_snapshot) -> bool:
+    """开球前重取赛程：指纹变了 → 旧卡作废，必须重算。"""
+    if not old_snapshot or not new_snapshot:
+        return True
+    return old_snapshot.get("payload_hash") != new_snapshot.get("payload_hash")
 
 
 def lambda_total_of(cards) -> float:
@@ -796,6 +838,22 @@ class PredictionPipeline:
                 m["injuries"] = inj
             meta["realtime_injury_available"] = True   # 手动伤病视为具备实时伤病
 
+        # 出卡前校验：本轮队集合必须与模型覆盖一致，否则不出卡（禁止均值兜底出正常卡）
+        if competition == "BL1" and fixtures:
+            _cover = {code for code, eng in CODE2ENG.items()
+                      if eng in getattr(self._bundle, "dc_attack", {})}
+            _cov = round_coverage(fixtures, _cover)
+            if not _cov["ok"]:
+                meta["coverage_error"] = _cov
+                return {"round": round_no, "competition": competition, "meta": meta,
+                        "freshness_label": self.data_freshness_label(meta),
+                        "cards": [], "coverage_error": _cov,
+                        "fixture_snapshot": fixture_fingerprint(
+                            fixtures, fetched_at=meta.get("freshness", {}).get("fetched_at"))}
+
+        snapshot = fixture_fingerprint(
+            fixtures, fetched_at=meta.get("freshness", {}).get("fetched_at"))
+
         # 疲劳特征：德甲轮次叠加欧战赛程（欧冠 + 欧联 + 欧会），CL 轮不需（自身即欧战）
         fatigue_map = {}
         if competition == "BL1":
@@ -846,11 +904,14 @@ class PredictionPipeline:
         else:
             # 无数据轮次：GBM 兜底退化 DC，输出基准概率（不抛 500）
             cards.append(self._baseline_card(round_no))
+        for c in cards:
+            c["fixture_hash"] = snapshot["payload_hash"]
         return {
             "round": round_no, "competition": competition,
             "meta": meta,
             "freshness_label": self.data_freshness_label(meta),
             "cards": cards,
+            "fixture_snapshot": snapshot,
         }
 
     def _baseline_card(self, round_no: int) -> dict:
