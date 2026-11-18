@@ -893,7 +893,7 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
                             "（期望进球是比分分布的中心，实际比分会围绕它波动，所以单个比分格的概率只有个位数到十几%）")
             _sh = c.get("injury_shift") or {}
             _lsh = c.get("lineup_shift") or {}
-            if any(_sh.get(k) for k in ("home", "away")) or any(_lsh.get(k) for k in ("home", "away")):
+            if _sh or _lsh:
                 st.markdown("| 偏移口径 | 主队 | 客队 |\n|---|---|---|\n"
                             f"| 伤病偏移（R2） | {float(_sh.get('home') or 0):.2f} | {float(_sh.get('away') or 0):.2f} |\n"
                             f"| 首发偏移（P5） | {float(_lsh.get('home') or 0):.2f} | {float(_lsh.get('away') or 0):.2f} |")
