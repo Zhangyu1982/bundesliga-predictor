@@ -5,7 +5,7 @@ P1 训练器：灌入德甲历史数据，拟合 Elo + Dixon-Coles，训练 GBM(
 三模型融合权重（config.ENSEMBLE_WEIGHTS）：elo=0.15 / poisson=0.40 / xgboost=0.30 / lightgbm=0.15
 """
 from __future__ import annotations
-import os, pickle, time
+import os, json, pickle, time
 import numpy as np
 import math
 import pandas as pd
@@ -295,6 +295,34 @@ def build_feature_vector(bundle: ModelBundle, home: str, away: str) -> dict:
     }
 
 
+PROVISIONAL_PATH = os.path.join(os.path.dirname(__file__), "data", "provisional_teams.json")
+
+
+def apply_provisional(b: ModelBundle) -> ModelBundle:
+    """把 2026-27 升班马的**临时**参数并进 DC 参数表（不改动现有 21 队）。
+
+    为什么不重训：这 3 队本赛季在 BL1 只有 10 场左右，样本不足以支撑独立参数；
+    用德乙近两季数据经跨级别换算 + 收缩得到的临时值，比"均值 1.0 静默兜底"更接近真实，
+    且明确标 calibrated=False、卡片上写明"参数为临时估计"，不并入业绩统计。
+    """
+    try:
+        payload = json.load(open(PROVISIONAL_PATH, encoding="utf-8"))
+    except Exception:
+        return b
+    names = []
+    for name, v in (payload.get("teams") or {}).items():
+        if not getattr(b, "dc_attack", None) or not getattr(b, "dc_defence", None):
+            break
+        if name in b.dc_attack:      # 已有真实参数 → 不覆盖
+            continue
+        b.dc_attack[name] = float(v["attack"])
+        b.dc_defence[name] = float(v["defence"])
+        names.append(name)
+    # 即使参数是上一轮已经并进来的，也要继续标记（幂等）
+    b.provisional = sorted(set(names) | set(payload.get("teams") or {}))
+    return b
+
+
 def _normalize_dc(b: ModelBundle) -> ModelBundle:
     """把 DC 的 attack/defence 归一到「平均队 = 1.0」，修默认尺度的语义错位。
 
@@ -309,10 +337,16 @@ def _normalize_dc(b: ModelBundle) -> ModelBundle:
     """
     if not getattr(b, "dc_attack", None):
         return b
-    ma = sum(b.dc_attack.values()) / len(b.dc_attack)
+    # 归一化只作用于"训练出来的核心队"：临时估计队（provisional）本来就按同一把尺
+    # （1.0 = 历史联赛平均）给出，把它们算进均值会把 gauge 拖偏，也会让二次归一化不幂等。
+    _prov = set(getattr(b, "provisional", []) or [])
+    core = {k: v for k, v in b.dc_attack.items() if k not in _prov}
+    if not core:
+        return b
+    ma = sum(core.values()) / len(core)
     if ma > 0:
-        b.dc_attack = {k: v / ma for k, v in b.dc_attack.items()}
-        b.dc_defence = {k: v * ma for k, v in b.dc_defence.items()}
+        b.dc_attack = {k: (v if k in _prov else v / ma) for k, v in b.dc_attack.items()}
+        b.dc_defence = {k: (v if k in _prov else v * ma) for k, v in b.dc_defence.items()}
     return b
 
 
@@ -327,7 +361,7 @@ def train(force: bool = False, verbose: bool = True) -> ModelBundle:
             if getattr(_b, "version", 0) == _BUNDLE_VERSION:
                 # 缓存产物也要归一：线上读的是 pickle，不是新训练结果，
                 # 不在这里调等于"改了没上线"。
-                return _normalize_dc(_b)
+                return apply_provisional(_normalize_dc(_b))
             print("[trainer] 旧 artifact 版本不符，重新训练")
         except Exception as _e:
             print(f"[trainer] artifact 读取失败（{type(_e).__name__}），重新训练")
@@ -364,6 +398,7 @@ def train(force: bool = False, verbose: bool = True) -> ModelBundle:
     # 新训练完也归一（与缓存路径同一口径），落盘的就是归一后的尺度
     bundle = _normalize_dc(bundle)
 
+    bundle = apply_provisional(bundle)
     os.makedirs(os.path.dirname(ARTIFACT_PATH), exist_ok=True)
     with open(ARTIFACT_PATH, "wb") as f:
         pickle.dump(bundle, f)

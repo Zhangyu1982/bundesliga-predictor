@@ -17,7 +17,7 @@ DISCLAIMER = ("本系统输出为概率推演，不构成投注建议。比分 T
               "伤病与国家队负荷在赛前 48 小时仍可能显著变动，初版与确认版之间的差异是系统的设计特性，不是缺陷。")
 
 
-BUILD = "2026-11-18 20:48"   # 部署自证：每次部署改这一行
+BUILD = "2026-11-18 21:26"   # 部署自证：每次部署改这一行
 
 
 from config import IMPORTANCE_LEVELS
@@ -931,6 +931,11 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
                         f"<span style='color:#ea580c'>橙</span>=轮换 · "
                         f"<span style='color:#6b7280'>灰</span>=替补）",
                         unsafe_allow_html=True)
+            _prov = c.get("provisional_teams") or []
+            if _prov:
+                st.warning("⚠️ **本场含临时参数球队：{}**　参数由德乙近两季数据经跨级别换算得到"
+                           "（未标定，calibrated=false），方向可用、比分分布仅供参考，"
+                           "不并入模型业绩统计。".format(" / ".join(_prov)))
             st.markdown(f"**风险**　{c['risk_note']}")
             # P4·优先级二①：预测解释（Explainable AI）——每卡底部可读理由
             st.markdown(_build_explanation(c, ss["competition"]))

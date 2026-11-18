@@ -23,6 +23,8 @@ CODE2ENG = {
     "BMG": "M'gladbach", "WOB": "Wolfsburg", "SVW": "Werder Bremen", "FCA": "Augsburg",
     "TSG": "Hoffenheim", "FCU": "Union Berlin", "BOC": "Bochum", "STP": "St Pauli",
     "HDH": "Heidenheim", "HSV": "Hamburg",
+    # 2026-27 升班马/回归队（模型侧参数：KOE 用其 BL1 历史值，ELV/PAD/SCH 用临时估计，见 data/provisional_teams.json）
+    "KOE": "FC Koln", "ELV": "Elversberg", "PAD": "Paderborn", "SCH": "Schalke 04",
 }
 ENG2CODE = {v: k for k, v in CODE2ENG.items()}
 

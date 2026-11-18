@@ -1,0 +1,13 @@
+{
+  "_meta": {
+    "purpose": "2026-27 赛季新升班马在 BL1 的参数临时估计（模型主参数不变，仅补齐覆盖缺口）",
+    "method": "用 football-data.co.uk 德乙 D2 近两季(2425/2526)按队归一化进攻/防守，乘跨级别换算系数(β_att=0.620, β_def=1.464，由 6 支两级别都打过的球队实测得出)，再向联赛均值 1.0 收缩(权重 n/(n+8))",
+    "calibrated": false,
+    "note": "临时估计，不参与标定；卡片标注『参数为临时估计』，不并入模型业绩统计"
+  },
+  "teams": {
+    "Elversberg": {"attack": 0.8068, "defence": 1.0888, "bl2_matches": 68, "bl2_attack_norm": 1.265, "bl2_defence_norm": 0.751, "weight": 0.895},
+    "Paderborn": {"attack": 0.7355, "defence": 1.2829, "bl2_matches": 68, "bl2_attack_norm": 1.136, "bl2_defence_norm": 0.899, "weight": 0.895},
+    "Schalke 04": {"attack": 0.6643, "defence": 1.3088, "bl2_matches": 68, "bl2_attack_norm": 1.008, "bl2_defence_norm": 0.919, "weight": 0.895}
+  }
+}

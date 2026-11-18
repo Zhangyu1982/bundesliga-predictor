@@ -17,8 +17,11 @@ def bundle():
 
 
 def test_mean_attack_is_one(bundle):
-    ma = sum(bundle.dc_attack.values()) / len(bundle.dc_attack)
-    assert abs(ma - 1.0) < 1e-6, f"mean(dc_attack)={ma}，归一化没生效"
+    """核心队（训练得到的 21 队）均值必须是 1.0；临时估计队按同一把尺给出，不参与归一。"""
+    prov = set(getattr(bundle, "provisional", []) or [])
+    core = {k: v for k, v in bundle.dc_attack.items() if k not in prov}
+    ma = sum(core.values()) / len(core)
+    assert abs(ma - 1.0) < 1e-6, f"mean(core dc_attack)={ma}，归一化没生效"
 
 
 def test_normalize_is_idempotent(bundle):
