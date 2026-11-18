@@ -75,3 +75,22 @@ def test_predict_round_blocks_cards_when_coverage_missing(monkeypatch=None):
     assert res["cards"] == [], "覆盖不一致时不得出卡"
     assert res["coverage_error"]["missing"] == ["ZZZ"]
     assert "赛程名单与模型覆盖不一致" in res["coverage_error"]["message"]
+
+
+def test_fixtures_origin_marks_seed_fallback():
+    """实时源失败时用的示例赛程必须被标记，不能冒充实时赛程。"""
+    from data.api_client import LiveFootballDataProvider
+    from data.seed_data import get_round_fixtures
+
+    prov = LiveFootballDataProvider(token="dummy")
+    prov._last_round_source = "live"
+    assert prov._fallback_fixtures(9, "x")                          # 走兜底
+    assert prov._last_round_source == "seed_fallback"
+
+
+def test_pipeline_meta_carries_fixtures_source(monkeypatch=None):
+    from pipeline import PredictionPipeline
+    p = PredictionPipeline()
+    p.provider._last_round_source = "seed_fallback"
+    fx, meta = p.fetch_round(10)
+    assert meta.get("fixtures_source") == "seed_fallback"

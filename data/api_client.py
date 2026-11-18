@@ -155,9 +155,11 @@ class LiveFootballDataProvider(_CachedProvider):
                               {"matchday": round_no}, self._daily_limit)
         except (ProviderUnavailableError, requests.HTTPError, requests.RequestException):
             if comp == LEAGUE:
+                self._last_round_source = "seed_fallback"
                 return self._fallback_fixtures(round_no, data_source=self.name)
             raise ProviderUnavailableError(f"{comp} 赛程拉取失败/配额受限")
         if comp == LEAGUE:
+            self._last_round_source = "live"
             standings_map = self._fetch_standings_map()
             return self._parse_fdo_matches(data.get("matches", []) or [], standings_map)
         return self._parse_fdo_matches(data.get("matches", []) or [], {}, competition=comp)
@@ -251,6 +253,7 @@ class LiveFootballDataProvider(_CachedProvider):
 
     def _fallback_fixtures(self, round_no: int, data_source: str) -> list[dict]:
         """实时配额/故障时回退种子赛程（标注缓存）。"""
+        self._last_round_source = "seed_fallback"   # 让上层能识别"这不是实时赛程"
         return get_round_fixtures(round_no)
 
     def freshness(self) -> dict:

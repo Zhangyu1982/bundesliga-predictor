@@ -17,7 +17,7 @@ DISCLAIMER = ("本系统输出为概率推演，不构成投注建议。比分 T
               "伤病与国家队负荷在赛前 48 小时仍可能显著变动，初版与确认版之间的差异是系统的设计特性，不是缺陷。")
 
 
-BUILD = "2026-11-18 21:10"   # 部署自证：每次部署改这一行
+BUILD = "2026-11-18 20:48"   # 部署自证：每次部署改这一行
 
 
 from config import IMPORTANCE_LEVELS
@@ -712,6 +712,11 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
     # 修复（P0）：cards 必须无条件绑定。原来只在 else 分支赋值，
     # comp_unavailable=True 时下面 `if ... and cards` 直接 NameError → 免费层赛事必崩。
     cards = result.get("cards") or []
+
+    # 赛程来源标记：实时源失败时用的是本地示例兜底 → 必须明示，不能冒充实时赛程
+    if (result.get("meta") or {}).get("fixtures_source") == "seed_fallback":
+        st.warning("⚠️ **本轮赛程来自本地示例兜底（实时源不可用/配额受限）**，球队名单可能不是本赛季，"
+                   "据此出的卡片仅供结构演示，请勿下注。")
 
     # 出卡前校验未通过：队集合与模型覆盖不一致 → 不出卡（禁止均值兜底出正常卡）
     if result.get("coverage_error"):
