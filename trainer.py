@@ -320,6 +320,39 @@ def apply_provisional(b: ModelBundle) -> ModelBundle:
         names.append(name)
     # 即使参数是上一轮已经并进来的，也要继续标记（幂等）
     b.provisional = sorted(set(names) | set(payload.get("teams") or {}))
+    return apply_lifecycle(b)
+
+
+def apply_lifecycle(b: ModelBundle, season: str | None = None) -> ModelBundle:
+    """降级队回归时按缺席季数衰减其参数（只衰减偏离 1.0 的部分）。
+
+    降级队参数不删除：它是德甲检验过的；升回来直接用原值太乐观，用德乙数据重估又浪费，
+    折中是 att' = 1 + (att-1)·0.85^k。
+    """
+    try:
+        from data.season_roster import load_roster
+        from data.team_lifecycle import carryover_params
+        from data.timeutil import season_label
+    except Exception:
+        return b
+    season = season or season_label()
+    roster = load_roster(season) or {}
+    if not roster:
+        return b
+    eng = {}
+    try:
+        from data.historical_data import CODE2ENG
+        eng = {code: CODE2ENG.get(code, code) for code in roster}
+    except Exception:
+        return b
+    params = {c: (b.dc_attack.get(e), b.dc_defence.get(e)) for c, e in eng.items()
+              if e in (b.dc_attack or {}) and e in (b.dc_defence or {})}
+    params = {c: v for c, v in params.items() if v[0] is not None and v[1] is not None}
+    new, touched = carryover_params(params, roster_codes=set(roster), season=season)
+    for code in touched:
+        e = eng[code]
+        b.dc_attack[e], b.dc_defence[e] = new[code]
+    b.carryover = touched
     return b
 
 

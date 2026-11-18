@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "roster_size": 18,
+  "round_size": 18,
+  "outside": [],
+  "absent": [],
+  "no_param": [],
+  "provisional": [
+    "ELV",
+    "PAD",
+    "SCH"
+  ],
+  "problems": [],
+  "season": "2627",
+  "round": null
+}

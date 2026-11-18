@@ -17,7 +17,7 @@ from data.historical_data import CODE2ENG
 from data.cross_competition import FatigueEngine, CrossElo
 from data.euro_fetch import fetch_current_euro
 
-VERSION = "p2.2"
+VERSION = "p2.3"
 
 # 比分口径：推荐方向取的是主/平/客三个"桶"里概率最高的一个（桶概率 = 该方向所有比分的和），
 # 而"最可能比分"取的是三十多个单格里最大的一个，两者量纲不同，因此可能落在不同方向。
@@ -932,6 +932,11 @@ class PredictionPipeline:
             # 无数据轮次：GBM 兜底退化 DC，输出基准概率（不抛 500）
             cards.append(self._baseline_card(round_no))
         _prov = set(getattr(self._bundle, "provisional", []) or [])
+        try:
+            from data.param_status import load_expires
+            _exp = load_expires()
+        except Exception:
+            _exp = 10
         for c in cards:
             c["fixture_hash"] = snapshot["payload_hash"]
             # 临时参数标记：卡片上要能看出"这场用到了临时估计的参数"
@@ -939,6 +944,12 @@ class PredictionPipeline:
             c["provisional_teams"] = sorted(
                 t for t in (_prov & {self._eng(_fx.get("home_code", "")),
                                      self._eng(_fx.get("away_code", ""))}) if t)
+            # 到期状态：临时参数踢满 N 轮后必须能被"看见"该重估了
+            if c["provisional_teams"]:
+                from data.param_status import status as _pstatus
+                c["provisional_status"] = {
+                    t: _pstatus(t, (meta or {}).get("season") or season_label(), expires_after_rounds=_exp)
+                    for t in c["provisional_teams"]}
         return {
             "round": round_no, "competition": competition,
             "meta": meta,
