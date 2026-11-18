@@ -1,35 +1,54 @@
-"""2026-27 赛季德甲 18 队基线名单。
+"""赛季名单：每个赛季一份 JSON（data/season_roster/<season>.json），按 season 读取。
 
-用途：出卡前「队集合必须与本季名单完全一致」的比对基准。
-为什么不能用模型参数覆盖集：模型 `dc_attack` 里 22 队包含了已降级的
-沃夫斯堡/海登海姆/圣保利/波鸿，用覆盖集比对会把正确的赛程判成「多出 4 队」。
+为什么要按赛季读而不是写死一份：
+- 每个赛季都有升班/降级，名单本身就是数据，不该硬编码在代码里；
+- 读不到本季名单时必须「拒绝出卡」，不能悄悄用上一季名单顶替——
+  否则旧季的 18 队会被当成合法赛程，整轮跑错却看着正常。
 
-更新时机：赛季开始、官方名单公布后手工改这里；不改 = 用上一版名单。
-"""
-SEASON = "2627"
-
-SEASON_ROSTER_2627 = {
-    "BAY": "拜仁慕尼黑",
-    "LEV": "勒沃库森",
-    "DOR": "多特蒙德",
-    "RBL": "莱比锡红牛",
-    "STU": "斯图加特",
-    "SGE": "法兰克福",
-    "SCF": "弗赖堡",
-    "MAI": "美因茨",
-    "BMG": "门兴格拉德巴赫",
-    "SVW": "云达不莱梅",
-    "FCA": "奥格斯堡",
-    "TSG": "霍芬海姆",
-    "FCU": "柏林联合",
-    "HSV": "汉堡",
-    "KOE": "科隆",
-    "ELV": "埃尔弗斯贝格",
-    "PAD": "帕德博恩",
-    "SCH": "沙尔克04",
+文件格式：
+{
+  "season": "2627",
+  "teams": {"BAY": "拜仁慕尼黑", ...},          # 恰好 18 队
+  "source": "升降级依据（谁升谁降）",
+  "updated_at": "YYYY-MM-DD"
 }
+"""
+from __future__ import annotations
 
-assert len(SEASON_ROSTER_2627) == 18, "2026-27 名单必须是 18 队"
+import json
+import os
 
-def roster_codes() -> set[str]:
-    return set(SEASON_ROSTER_2627)
+ROSTER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "season_roster")
+
+
+def roster_path(season: str) -> str:
+    return os.path.join(ROSTER_DIR, f"{season}.json")
+
+
+def load_roster(season: str | None = None) -> dict[str, str] | None:
+    """读某季名单；season 缺省取当前赛季。文件不存在/格式不合法/不是 18 队 → 返回 None。"""
+    if season is None:
+        from data.timeutil import season_label
+        season = season_label()
+    path = roster_path(str(season))
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+    teams = data.get("teams") or {}
+    if not isinstance(teams, dict) or len(teams) != 18:
+        return None
+    return {str(k): str(v) for k, v in teams.items()}
+
+
+def roster_codes(season: str | None = None) -> set[str]:
+    return set(load_roster(season) or {})
+
+
+# 兼容别名：现有代码/测试引用的是 2627 常量，值一律来自上面的 JSON（单一来源）
+SEASON_ROSTER_2627 = load_roster("2627") or {}
+SEASON = "2627"
+assert len(SEASON_ROSTER_2627) == 18, "data/season_roster/2627.json 缺失或不是 18 队"

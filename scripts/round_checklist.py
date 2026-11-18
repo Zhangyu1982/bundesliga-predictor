@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pipeline import fixture_fingerprint                     # noqa: E402
-from data.season_roster import SEASON_ROSTER_2627            # noqa: E402
+from data.season_roster import load_roster                        # noqa: E402
 
 CST = timezone(timedelta(hours=8))
 EXPECTED_TEAMS = 18
@@ -53,7 +53,10 @@ def check_round(fixtures, meta, cover_codes, window, expected_matches=EXPECTED_M
         for k in ("home_code", "away_code"):
             if m.get(k):
                 codes.add(m[k])
-    roster = set(roster if roster is not None else SEASON_ROSTER_2627)
+    if roster is None:
+        from data.timeutil import season_label
+        roster = load_roster(season_label()) or {}
+    roster = set(roster)
     missing = sorted(roster - codes)          # 名单里有、本轮没出现
     extra = sorted(codes - roster)            # 本轮有、名单外（= 跑错批次/串季的直接证据）
     no_param = sorted(codes - set(cover_codes))
@@ -141,7 +144,8 @@ def _load_round(round_no: int):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--round", type=int, required=True)
-    ap.add_argument("--window", default=None, help="本地日期窗口，如 2026-11-20:2026-11-22")
+    ap.add_argument("--window", default=None, help="UTC 日期窗口，如 2026-11-20:2026-11-22")
+    ap.add_argument("--season", default=None, help="赛季，如 2627；缺省按当前赛季")
     a = ap.parse_args()
     fx, meta, cover = _load_round(a.round)
     if a.window:
@@ -154,7 +158,11 @@ def main() -> int:
         fx, fetched_at=(meta.get("freshness") or {}).get("fetched_at")))
     print(f"第 {a.round} 轮 · 赛程来源 = {meta.get('fixtures_source')} · "
           f"窗口 = {window[0]} ~ {window[1]}")
-    res = check_round(fx, meta, cover, window)
+    roster = load_roster(a.season or meta.get("season"))
+    if roster is None:
+        print(f"[FAIL] 0. 本季名单未登记（season={a.season or meta.get('season')}）—— 拒绝出卡")
+        return 1
+    res = check_round(fx, meta, cover, window, roster=roster)
     for r in res:
         print(f"[{'PASS' if r['ok'] else 'FAIL'}] {r['no']}. {r['name']} —— {r['detail']}")
     print("结论：", "四条全过，可出卡" if all_pass(res) else "有未过项，拒绝出卡")

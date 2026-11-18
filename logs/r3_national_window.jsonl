@@ -2658,3 +2658,105 @@
 {"rule": "R3_national_window", "match_id": "r7", "event": "window", "ts": "2026-11-18T21:24:16.918049", "payload": {"team": "Mainz", "active": false, "xg_discount": 0.0}}
 {"rule": "R3_national_window", "match_id": "r8", "event": "window", "ts": "2026-11-18T21:24:16.938992", "payload": {"team": "Werder Bremen", "active": false, "xg_discount": 0.0}}
 {"rule": "R3_national_window", "match_id": "r8", "event": "window", "ts": "2026-11-18T21:24:16.941766", "payload": {"team": "Hamburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x0", "event": "window", "ts": "2026-11-18T21:29:21.715573", "payload": {"team": "Bayern Munich", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x0", "event": "window", "ts": "2026-11-18T21:29:21.718458", "payload": {"team": "FC Koln", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x1", "event": "window", "ts": "2026-11-18T21:29:21.778091", "payload": {"team": "Union Berlin", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x1", "event": "window", "ts": "2026-11-18T21:29:21.781046", "payload": {"team": "RB Leipzig", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x2", "event": "window", "ts": "2026-11-18T21:29:21.798946", "payload": {"team": "Leverkusen", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x2", "event": "window", "ts": "2026-11-18T21:29:21.802813", "payload": {"team": "Paderborn", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x3", "event": "window", "ts": "2026-11-18T21:29:21.832811", "payload": {"team": "M'gladbach", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x3", "event": "window", "ts": "2026-11-18T21:29:21.835606", "payload": {"team": "Dortmund", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x4", "event": "window", "ts": "2026-11-18T21:29:21.866108", "payload": {"team": "Ein Frankfurt", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x4", "event": "window", "ts": "2026-11-18T21:29:21.869288", "payload": {"team": "Hoffenheim", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x5", "event": "window", "ts": "2026-11-18T21:29:21.890644", "payload": {"team": "Elversberg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x5", "event": "window", "ts": "2026-11-18T21:29:21.893828", "payload": {"team": "Freiburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x6", "event": "window", "ts": "2026-11-18T21:29:21.915572", "payload": {"team": "Schalke 04", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x6", "event": "window", "ts": "2026-11-18T21:29:21.918473", "payload": {"team": "Stuttgart", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x7", "event": "window", "ts": "2026-11-18T21:29:21.944479", "payload": {"team": "Augsburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x7", "event": "window", "ts": "2026-11-18T21:29:21.947518", "payload": {"team": "Mainz", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x8", "event": "window", "ts": "2026-11-18T21:29:21.968225", "payload": {"team": "Werder Bremen", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x8", "event": "window", "ts": "2026-11-18T21:29:21.971153", "payload": {"team": "Hamburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x0", "event": "window", "ts": "2026-11-18T21:29:27.284638", "payload": {"team": "Bayern Munich", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x0", "event": "window", "ts": "2026-11-18T21:29:27.288940", "payload": {"team": "FC Koln", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x1", "event": "window", "ts": "2026-11-18T21:29:27.310083", "payload": {"team": "Union Berlin", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x1", "event": "window", "ts": "2026-11-18T21:29:27.312917", "payload": {"team": "RB Leipzig", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x2", "event": "window", "ts": "2026-11-18T21:29:27.335331", "payload": {"team": "Leverkusen", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x2", "event": "window", "ts": "2026-11-18T21:29:27.337975", "payload": {"team": "Paderborn", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x3", "event": "window", "ts": "2026-11-18T21:29:27.360919", "payload": {"team": "M'gladbach", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x3", "event": "window", "ts": "2026-11-18T21:29:27.363769", "payload": {"team": "Dortmund", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x4", "event": "window", "ts": "2026-11-18T21:29:27.387121", "payload": {"team": "Ein Frankfurt", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x4", "event": "window", "ts": "2026-11-18T21:29:27.390095", "payload": {"team": "Hoffenheim", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x5", "event": "window", "ts": "2026-11-18T21:29:27.410838", "payload": {"team": "Elversberg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x5", "event": "window", "ts": "2026-11-18T21:29:27.413808", "payload": {"team": "Freiburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x6", "event": "window", "ts": "2026-11-18T21:29:27.439922", "payload": {"team": "Schalke 04", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x6", "event": "window", "ts": "2026-11-18T21:29:27.442703", "payload": {"team": "Stuttgart", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x7", "event": "window", "ts": "2026-11-18T21:29:27.462522", "payload": {"team": "Augsburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x7", "event": "window", "ts": "2026-11-18T21:29:27.465558", "payload": {"team": "Mainz", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x8", "event": "window", "ts": "2026-11-18T21:29:27.488441", "payload": {"team": "Werder Bremen", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x8", "event": "window", "ts": "2026-11-18T21:29:27.491185", "payload": {"team": "Hamburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x0", "event": "window", "ts": "2026-11-18T21:29:59.798047", "payload": {"team": "Bayern Munich", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x0", "event": "window", "ts": "2026-11-18T21:29:59.801349", "payload": {"team": "FC Koln", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x1", "event": "window", "ts": "2026-11-18T21:29:59.853609", "payload": {"team": "Union Berlin", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x1", "event": "window", "ts": "2026-11-18T21:29:59.856634", "payload": {"team": "RB Leipzig", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x2", "event": "window", "ts": "2026-11-18T21:29:59.877085", "payload": {"team": "Leverkusen", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x2", "event": "window", "ts": "2026-11-18T21:29:59.879807", "payload": {"team": "Paderborn", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x3", "event": "window", "ts": "2026-11-18T21:29:59.903473", "payload": {"team": "M'gladbach", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x3", "event": "window", "ts": "2026-11-18T21:29:59.906406", "payload": {"team": "Dortmund", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x4", "event": "window", "ts": "2026-11-18T21:29:59.928419", "payload": {"team": "Ein Frankfurt", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x4", "event": "window", "ts": "2026-11-18T21:29:59.931238", "payload": {"team": "Hoffenheim", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x5", "event": "window", "ts": "2026-11-18T21:29:59.950582", "payload": {"team": "Elversberg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x5", "event": "window", "ts": "2026-11-18T21:29:59.953463", "payload": {"team": "Freiburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x6", "event": "window", "ts": "2026-11-18T21:29:59.973354", "payload": {"team": "Schalke 04", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x6", "event": "window", "ts": "2026-11-18T21:29:59.976305", "payload": {"team": "Stuttgart", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x7", "event": "window", "ts": "2026-11-18T21:29:59.996686", "payload": {"team": "Augsburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x7", "event": "window", "ts": "2026-11-18T21:29:59.999957", "payload": {"team": "Mainz", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x8", "event": "window", "ts": "2026-11-18T21:30:00.024031", "payload": {"team": "Werder Bremen", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x8", "event": "window", "ts": "2026-11-18T21:30:00.027475", "payload": {"team": "Hamburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "BUN_2026_27_R09_MAI_BAY", "event": "window", "ts": "2026-11-18T21:30:09.816237", "payload": {"team": "美因茨", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "BUN_2026_27_R09_MAI_BAY", "event": "window", "ts": "2026-11-18T21:30:09.818648", "payload": {"team": "拜仁慕尼黑", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "565851", "event": "window", "ts": "2026-11-18T21:30:17.471123", "payload": {"team": "Mainz", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "565851", "event": "window", "ts": "2026-11-18T21:30:17.474476", "payload": {"team": "Bayern Munich", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "565851", "event": "window", "ts": "2026-11-18T21:30:17.553008", "payload": {"team": "Mainz", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "565851", "event": "window", "ts": "2026-11-18T21:30:17.556447", "payload": {"team": "Bayern Munich", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "565851", "event": "window", "ts": "2026-11-18T21:30:21.173997", "payload": {"team": "Mainz", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "565851", "event": "window", "ts": "2026-11-18T21:30:21.176946", "payload": {"team": "Bayern Munich", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "565851", "event": "window", "ts": "2026-11-18T21:30:21.204895", "payload": {"team": "Mainz", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "565851", "event": "window", "ts": "2026-11-18T21:30:21.207822", "payload": {"team": "Bayern Munich", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "565851", "event": "window", "ts": "2026-11-18T21:30:21.326110", "payload": {"team": "Mainz", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "565851", "event": "window", "ts": "2026-11-18T21:30:21.329638", "payload": {"team": "Bayern Munich", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r0", "event": "window", "ts": "2026-11-18T21:30:29.366091", "payload": {"team": "Bayern Munich", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r0", "event": "window", "ts": "2026-11-18T21:30:29.369554", "payload": {"team": "FC Koln", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r1", "event": "window", "ts": "2026-11-18T21:30:29.392032", "payload": {"team": "Union Berlin", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r1", "event": "window", "ts": "2026-11-18T21:30:29.395067", "payload": {"team": "RB Leipzig", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r2", "event": "window", "ts": "2026-11-18T21:30:29.417808", "payload": {"team": "Leverkusen", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r2", "event": "window", "ts": "2026-11-18T21:30:29.420917", "payload": {"team": "Paderborn", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r3", "event": "window", "ts": "2026-11-18T21:30:29.442972", "payload": {"team": "M'gladbach", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r3", "event": "window", "ts": "2026-11-18T21:30:29.445766", "payload": {"team": "Dortmund", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r4", "event": "window", "ts": "2026-11-18T21:30:29.471366", "payload": {"team": "Ein Frankfurt", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r4", "event": "window", "ts": "2026-11-18T21:30:29.474431", "payload": {"team": "Hoffenheim", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r5", "event": "window", "ts": "2026-11-18T21:30:29.497719", "payload": {"team": "Elversberg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r5", "event": "window", "ts": "2026-11-18T21:30:29.500269", "payload": {"team": "Freiburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r6", "event": "window", "ts": "2026-11-18T21:30:29.534112", "payload": {"team": "Schalke 04", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r6", "event": "window", "ts": "2026-11-18T21:30:29.536752", "payload": {"team": "Stuttgart", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r7", "event": "window", "ts": "2026-11-18T21:30:29.563701", "payload": {"team": "Augsburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r7", "event": "window", "ts": "2026-11-18T21:30:29.566471", "payload": {"team": "Mainz", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r8", "event": "window", "ts": "2026-11-18T21:30:29.593324", "payload": {"team": "Werder Bremen", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "r8", "event": "window", "ts": "2026-11-18T21:30:29.596408", "payload": {"team": "Hamburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x0", "event": "window", "ts": "2026-11-18T21:30:34.978031", "payload": {"team": "Bayern Munich", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x0", "event": "window", "ts": "2026-11-18T21:30:34.982187", "payload": {"team": "FC Koln", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x1", "event": "window", "ts": "2026-11-18T21:30:35.004844", "payload": {"team": "Union Berlin", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x1", "event": "window", "ts": "2026-11-18T21:30:35.007741", "payload": {"team": "RB Leipzig", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x2", "event": "window", "ts": "2026-11-18T21:30:35.035202", "payload": {"team": "Leverkusen", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x2", "event": "window", "ts": "2026-11-18T21:30:35.037964", "payload": {"team": "Paderborn", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x3", "event": "window", "ts": "2026-11-18T21:30:35.058347", "payload": {"team": "M'gladbach", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x3", "event": "window", "ts": "2026-11-18T21:30:35.061390", "payload": {"team": "Dortmund", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x4", "event": "window", "ts": "2026-11-18T21:30:35.193865", "payload": {"team": "Ein Frankfurt", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x4", "event": "window", "ts": "2026-11-18T21:30:35.227153", "payload": {"team": "Hoffenheim", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x5", "event": "window", "ts": "2026-11-18T21:30:35.301237", "payload": {"team": "Elversberg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x5", "event": "window", "ts": "2026-11-18T21:30:35.304579", "payload": {"team": "Freiburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x6", "event": "window", "ts": "2026-11-18T21:30:35.326648", "payload": {"team": "Schalke 04", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x6", "event": "window", "ts": "2026-11-18T21:30:35.329676", "payload": {"team": "Stuttgart", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x7", "event": "window", "ts": "2026-11-18T21:30:35.354889", "payload": {"team": "Augsburg", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x7", "event": "window", "ts": "2026-11-18T21:30:35.357836", "payload": {"team": "Mainz", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x8", "event": "window", "ts": "2026-11-18T21:30:35.380642", "payload": {"team": "Werder Bremen", "active": false, "xg_discount": 0.0}}
+{"rule": "R3_national_window", "match_id": "x8", "event": "window", "ts": "2026-11-18T21:30:35.383563", "payload": {"team": "Hamburg", "active": false, "xg_discount": 0.0}}
