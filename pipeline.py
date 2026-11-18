@@ -17,7 +17,7 @@ from data.historical_data import CODE2ENG
 from data.cross_competition import FatigueEngine, CrossElo
 from data.euro_fetch import fetch_current_euro
 
-VERSION = "p2.5"
+VERSION = "p2.6"
 
 # 比分口径：推荐方向取的是主/平/客三个"桶"里概率最高的一个（桶概率 = 该方向所有比分的和），
 # 而"最可能比分"取的是三十多个单格里最大的一个，两者量纲不同，因此可能落在不同方向。
@@ -124,6 +124,27 @@ def round_coverage(fixtures, cover_codes) -> dict:
         return {"ok": True, "missing": [], "codes": sorted(codes), "message": ""}
     return {"ok": False, "missing": missing, "codes": sorted(codes),
             "message": "赛程名单与模型覆盖不一致（缺 {}）".format("/".join(missing))}
+
+
+def mark_param_flags(cards, fixtures, bundle, eng=None, season=None):
+    """给每张卡片标注「临时参数队」与「降级回归、参数已衰减队」。
+
+    参数被临时估计或被衰减，如果卡片上不写出来，就是静默改参数：用户看到的是
+    正常概率，实际口径已经不同。这里统一在一处打标，app/pipeline/报表共用。
+    """
+    from data.historical_data import CODE2ENG
+    eng = eng or (lambda c: CODE2ENG.get(c, c) if c else "")
+    prov = set(getattr(bundle, "provisional", []) or [])
+    # carryover 存的是队码（apply_lifecycle 写 touched），统一换成英文名再比对
+    carry = {eng(c) if c in CODE2ENG else c
+             for c in (getattr(bundle, "carryover", []) or [])}
+    fx_by_id = {f.get("match_id"): f for f in (fixtures or [])}
+    for c in cards or []:
+        fx = fx_by_id.get(c.get("match_id")) or {}
+        names = {eng(fx.get("home_code") or ""), eng(fx.get("away_code") or "")}
+        c["provisional_teams"] = sorted(t for t in (prov & names) if t)
+        c["carryover_teams"] = sorted(t for t in (carry & names) if t)
+    return cards
 
 
 def fixture_fingerprint(fixtures, fetched_at: str | None = None) -> dict:
@@ -941,9 +962,8 @@ class PredictionPipeline:
             c["fixture_hash"] = snapshot["payload_hash"]
             # 临时参数标记：卡片上要能看出"这场用到了临时估计的参数"
             _fx = next((f for f in fixtures if f.get("match_id") == c.get("match_id")), {})
-            c["provisional_teams"] = sorted(
-                t for t in (_prov & {self._eng(_fx.get("home_code", "")),
-                                     self._eng(_fx.get("away_code", ""))}) if t)
+            mark_param_flags([c], fixtures, self._bundle, eng=self._eng,
+                             season=(meta or {}).get("season"))
             # 到期状态：临时参数踢满 N 轮后必须能被"看见"该重估了
             if c["provisional_teams"]:
                 from data.param_status import status as _pstatus

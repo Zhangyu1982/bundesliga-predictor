@@ -1,0 +1,39 @@
+{
+  "season": "2627",
+  "provisional_teams": [
+    "Elversberg",
+    "Paderborn",
+    "Schalke 04"
+  ],
+  "carryover_teams": [],
+  "stats": {
+    "all": {
+      "n": 11,
+      "hits": 8,
+      "hit_rate": 0.7272727272727273,
+      "insufficient": false,
+      "min_n": 10
+    },
+    "stable": {
+      "n": 8,
+      "hits": 6,
+      "hit_rate": 0.75,
+      "insufficient": true,
+      "min_n": 10
+    },
+    "provisional": {
+      "n": 3,
+      "hits": 2,
+      "hit_rate": 0.6666666666666666,
+      "insufficient": true,
+      "min_n": 10
+    },
+    "carryover": {
+      "n": 0,
+      "hits": 0,
+      "hit_rate": 0.0,
+      "insufficient": true,
+      "min_n": 10
+    }
+  }
+}

@@ -345,13 +345,28 @@ def apply_lifecycle(b: ModelBundle, season: str | None = None) -> ModelBundle:
         eng = {code: CODE2ENG.get(code, code) for code in roster}
     except Exception:
         return b
-    params = {c: (b.dc_attack.get(e), b.dc_defence.get(e)) for c, e in eng.items()
-              if e in (b.dc_attack or {}) and e in (b.dc_defence or {})}
+    # 基准值快照：衰减必须从「未衰减的原始参数」重算，否则重复 apply（进程重启、
+    # pickle 往返、跨赛季推进）会在已衰减值上再乘一次 0.85，参数被静默吃掉。
+    base_att = getattr(b, "dc_base_attack", None)
+    base_dfn = getattr(b, "dc_base_defence", None)
+    if base_att is None or base_dfn is None:
+        b.dc_base_attack = dict(b.dc_attack or {})
+        b.dc_base_defence = dict(b.dc_defence or {})
+        base_att, base_dfn = b.dc_base_attack, b.dc_base_defence
+    else:
+        # 之后新并进来的参数（如新升班马临时值）补进基准，避免被旧基准覆盖
+        for k, v in (b.dc_attack or {}).items():
+            base_att.setdefault(k, v)
+        for k, v in (b.dc_defence or {}).items():
+            base_dfn.setdefault(k, v)
+    params = {c: (base_att.get(e), base_dfn.get(e)) for c, e in eng.items()
+              if e in base_att and e in base_dfn}
     params = {c: v for c, v in params.items() if v[0] is not None and v[1] is not None}
     new, touched = carryover_params(params, roster_codes=set(roster), season=season)
-    for code in touched:
+    # 先无条件把本季涉及的队写回基准值（touched 为空时也要复位，保证幂等）
+    for code, (a0, d0) in params.items():
         e = eng[code]
-        b.dc_attack[e], b.dc_defence[e] = new[code]
+        b.dc_attack[e], b.dc_defence[e] = (new[code][0], new[code][1]) if code in touched else (a0, d0)
     b.carryover = touched
     return b
 
