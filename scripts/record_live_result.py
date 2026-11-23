@@ -94,6 +94,16 @@ def record(rec: dict, db_path: str = DB_PATH, live_path: str | None = None) -> i
     return n
 
 
+def _shift_basis(home, away, computed: bool):
+    """三态：None=未计算；computed=算了且可信；unverified=有值但没声明来源。"""
+    if home is None and away is None:
+        return None
+    for v in (home, away):
+        if v is not None and not (0.0 <= float(v) <= 0.30):
+            raise SystemExit(f"shift 越界：{v}（允许 0.00~0.30；未计算请留空）")
+    return "computed" if computed else "unverified"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="记录一场真实比赛结果到 R1 偏差数据库")
     ap.add_argument("--kickoff", required=True,
@@ -119,6 +129,8 @@ def main() -> None:
                     help="本场预测时的伤病偏移（主队，DC 攻击折扣口径）；用于 P0-1 有效性回测")
     ap.add_argument("--shift-away", type=float, default=None,
                     help="本场预测时的伤病偏移（客队）")
+    ap.add_argument("--shift-computed", action="store_true",
+                    help="声明本场确实按首发/伤病名单算过偏移（用于区分 null=未计算 与 0.0=算了且为零）")
     args = ap.parse_args()
 
     kickoff_dt = parse_kickoff(args.kickoff)
@@ -167,6 +179,7 @@ def main() -> None:
         "divergence": args.divergence,
         "shift_home": args.shift_home,
         "shift_away": args.shift_away,
+        "shift_basis": _shift_basis(args.shift_home, args.shift_away, args.shift_computed),
     }
     n = record(rec)
     # λ 滚动账：有 --lam-pred 就记一笔，用于"最近 N 场 Σλ vs Σ实际"的 z
@@ -182,7 +195,7 @@ def main() -> None:
             print(f"[lambda_track] 记账失败：{type(_e).__name__}")
     print(f"已写入 {n} 条：{season} R{round_no} {args.home} vs {args.away} "
           f"实际 {args.hg}-{args.ag} ({args.ftr}) · 预测首选 {args.pick} · 命中 "
-          f"{_auto_pred_hit(args.pick, args.ftr)}")
+          f"{_auto_pred_hit(args.pick, args.ftr)} · shift {rec['shift_basis'] or '未计算'}")
 
 
 if __name__ == "__main__":
