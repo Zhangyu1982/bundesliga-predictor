@@ -7,10 +7,11 @@ P1 新增：灌入德甲历史 CSV 重训 Elo + Dixon-Coles + GBM（XGB+LGBM）�
 """
 from __future__ import annotations
 import math
+import os
 from datetime import datetime
 from data.timeutil import season_label
 from config import (RULES, SEASON, ENSEMBLE_WEIGHTS, uncalibrated_thresholds,
-                    FATIGUE_RULES, LUCK_REGRESSION, HOME_ADV, DRAW_RECAL)
+                    FATIGUE_RULES, LUCK_REGRESSION, HOME_ADV, DRAW_RECAL, DRAW_SHADOW)
 from schema import validate_probs, validate_stage_window
 from data.api_client import resolve_provider, team_zh
 from data.historical_data import CODE2ENG
@@ -289,6 +290,22 @@ class PredictionPipeline:
             "lam": {"home": round(lam_h, 2), "away": round(lam_a, 2),
                     "total": round(lam_h + lam_a, 2)},
         }
+
+    @staticmethod
+    def _shadow_draw(match_id, probs, season) -> None:
+        """影子模式：原概率与校准概率都记日志，展示层不受影响。"""
+        try:
+            import json as _json
+            from data.draw_map import recalibrate_draw
+            os.makedirs("logs", exist_ok=True)
+            rec = {"match_id": match_id, "season": season,
+                   "base": {k: round(float(probs[k]), 4) for k in ("home_win", "draw", "away_win")}}
+            rec["recal"] = {k: round(float(v), 4) for k, v in recalibrate_draw(probs).items()
+                            if k in ("home_win", "draw", "away_win")}
+            with open(os.path.join("logs", "draw_shadow.jsonl"), "a", encoding="utf-8") as f:
+                f.write(_json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
     @staticmethod
     def _apply_draw_map(probs: dict) -> dict:
@@ -991,6 +1008,10 @@ class PredictionPipeline:
             _m, _flat = view_margin(c.get("probabilities"))
             c["view_margin"] = round(_m, 4)
             c["no_view"] = _flat
+            # A/B 归因：卡片上带开关状态；影子模式只记账不展示
+            c["draw_recal"] = bool(DRAW_RECAL)
+            if DRAW_SHADOW:
+                self._shadow_draw(c.get("match_id"), c.get("probabilities"), (meta or {}).get("season"))
             # 到期状态：临时参数踢满 N 轮后必须能被"看见"该重估了
             if c["provisional_teams"]:
                 from data.param_status import status as _pstatus

@@ -19,7 +19,8 @@ HOME_ADV = 50             # Elo 主场优势（网格搜索定值）
 ELO_K = 15                # Elo 步长
 DC_DECAY = 0.03           # Dixon-Coles 时间衰减系数
 DC_RHO = -0.20
-DRAW_RECAL = False        # 平局输出层校准开关（A/B）；映射锚点见 data/draw_map.json            # Dixon-Coles 参数（移植自 tip-ai）
+DRAW_RECAL = False        # 平局输出层校准开关（A/B）；映射锚点见 data/draw_map.json
+DRAW_SHADOW = False       # 影子模式：后台算两套只记日志（logs/draw_shadow.jsonl），展示仍用原概率
 # 集成权重（liveljack 最优配比）
 ENSEMBLE_WEIGHTS = {
     "elo": 0.15,

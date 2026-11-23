@@ -22,7 +22,8 @@ HOLDOUT_SEASON = "2526"
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "draw_map.json")
 
 # (draw 概率, 校准后 draw 概率)；线性插值，两端裁剪
-DEFAULT_MAP = [[0.0, 0.16], [0.15, 0.165], [0.30, 0.28], [0.60, 0.30]]
+# 末端锚点止于 0.45：留出集 draw≥0.60 为 0 场，超过 0.45 一律按 0.30 处理，不外推
+DEFAULT_MAP = [[0.0, 0.16], [0.15, 0.165], [0.30, 0.28], [0.45, 0.30]]
 
 
 def load_map(path: str = MODEL_PATH) -> list[list[float]]:
