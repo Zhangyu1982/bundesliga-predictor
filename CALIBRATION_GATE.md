@@ -72,6 +72,12 @@
 | λ 多轮诊断 | 滚动窗口 ≥ **30 场** | **滚动 30 场**做检测（累计 z 会随样本增长钝化，永远到不了 2，故只用于报告）；z=(Σ实际−Σλ)/√Σλ，门槛 \|z\|>2；不用 Top1 求和 |
 
 
+## 同步唯一入口
+
+跨环境同步只允许：`pwsh -File .\sync_from_raw.ps1 -Repo <仓库> -Files a,b`
+（内部 `scripts/sync_from_raw.ps1`：curl 退出码 + 非空 + 大小 + 重试；0 字节文件不落盘）。
+`tests/test_sync_guard.py` 会扫描仓库，发现除该实现外任何代码直接访问 raw 即失败——**绕过比遵守更麻烦**。
+
 ## 用法
 
 新提案先跑 `scripts/draw_recal_validate.py` / `scripts/draw_soft_check.py` 同一套流程，

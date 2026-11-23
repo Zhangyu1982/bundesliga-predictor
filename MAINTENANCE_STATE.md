@@ -35,6 +35,10 @@
 - “通过项须在另一个时间窗复现”意味着任何新提案至少跨半季，**等待名单长期为空是设计如此，不是停滞**。
 - 真实产出集中在两处：P0-1 的 10 场分布、λ 的 30 场滚动 z。
 
+## 同步入口
+
+唯一入口 `pwsh -File .\sync_from_raw.ps1 -Repo <仓库> -Files a,b`；守卫测试 `tests/test_sync_guard.py` 禁止任何其他代码直连 raw。
+
 ## 下一轮复盘表头固定项
 
 `fixture_snapshot`｜λ 合计｜DRAW_RECAL / DRAW_SHADOW 状态｜样本切分（全样本 / 仅稳定 / 含临时 / 含衰减）。
