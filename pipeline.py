@@ -10,14 +10,14 @@ import math
 from datetime import datetime
 from data.timeutil import season_label
 from config import (RULES, SEASON, ENSEMBLE_WEIGHTS, uncalibrated_thresholds,
-                    FATIGUE_RULES, LUCK_REGRESSION, HOME_ADV)
+                    FATIGUE_RULES, LUCK_REGRESSION, HOME_ADV, DRAW_RECAL)
 from schema import validate_probs, validate_stage_window
 from data.api_client import resolve_provider, team_zh
 from data.historical_data import CODE2ENG
 from data.cross_competition import FatigueEngine, CrossElo
 from data.euro_fetch import fetch_current_euro
 
-VERSION = "p2.6"
+VERSION = "p2.7"
 
 # 比分口径：推荐方向取的是主/平/客三个"桶"里概率最高的一个（桶概率 = 该方向所有比分的和），
 # 而"最可能比分"取的是三十多个单格里最大的一个，两者量纲不同，因此可能落在不同方向。
@@ -290,6 +290,14 @@ class PredictionPipeline:
                     "total": round(lam_h + lam_a, 2)},
         }
 
+    @staticmethod
+    def _apply_draw_map(probs: dict) -> dict:
+        """平局输出层校准（A/B）：只动 draw，主客同比例缩放，不改 rho/λ。"""
+        if not DRAW_RECAL:
+            return probs
+        from data.draw_map import recalibrate_draw
+        return recalibrate_draw(probs)
+
     def _probs_for(self, home_code: str, away_code: str,
                    home_disc: float = 0.0, away_disc: float = 0.0,
                    inj_shift_h: float = 0.0, inj_shift_a: float = 0.0) -> dict:
@@ -477,7 +485,7 @@ class PredictionPipeline:
             h_elo = self.cross_elo.rating_for(home_code, home)
             a_elo = self.cross_elo.rating_for(away_code, away)
             res = self._cross_probs_for(h_elo, a_elo, competition)
-        probs = res["fused"]
+        probs = self._apply_draw_map(res["fused"])
         validate_probs(probs)
         base_probs = {k: round(v, 3) for k, v in probs.items()}
         inj_shift = {"home": 0.0, "away": 0.0}
@@ -499,7 +507,7 @@ class PredictionPipeline:
             if inj_shift["home"] or inj_shift["away"]:
                 res_c = self._probs_for(home_code, away_code, home_disc=disc_h, away_disc=disc_a,
                                         inj_shift_h=inj_shift["home"], inj_shift_a=inj_shift["away"])
-                confirm_probs = res_c["fused"]
+                confirm_probs = self._apply_draw_map(res_c["fused"])
                 validate_probs(confirm_probs)
                 probs = confirm_probs   # 卡片主概率 = 确认版复算结果
                 res = res_c

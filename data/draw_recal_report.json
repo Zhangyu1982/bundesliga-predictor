@@ -1,0 +1,187 @@
+{
+  "map": [
+    [
+      0.0,
+      0.16
+    ],
+    [
+      0.15,
+      0.165
+    ],
+    [
+      0.3,
+      0.28
+    ],
+    [
+      0.6,
+      0.3
+    ]
+  ],
+  "fit_seasons": [
+    "2324",
+    "2425"
+  ],
+  "fit_n": 502,
+  "holdout": "2526",
+  "holdout_n": 305,
+  "holdout_metrics": {
+    "before": {
+      "brier": 0.5984,
+      "logloss": 1.0233,
+      "hit": 0.5246
+    },
+    "after": {
+      "brier": 0.5963,
+      "logloss": 1.0184,
+      "hit": 0.5246
+    }
+  },
+  "segments_before": [
+    {
+      "segment": "≤0.15（强队场）",
+      "n": 23,
+      "pred_mass": 2.51,
+      "actual_draws": 4,
+      "z": 0.94
+    },
+    {
+      "segment": "0.15–0.30（均势偏）",
+      "n": 217,
+      "pred_mass": 52.71,
+      "actual_draws": 54,
+      "z": 0.18
+    },
+    {
+      "segment": "≥0.30（均势）",
+      "n": 65,
+      "pred_mass": 22.06,
+      "actual_draws": 16,
+      "z": -1.29
+    }
+  ],
+  "segments_after": [
+    {
+      "segment": "≤0.15（强队场）",
+      "n": 23,
+      "pred_mass": 3.76,
+      "actual_draws": 4,
+      "z": 0.12
+    },
+    {
+      "segment": "0.15–0.30（均势偏）",
+      "n": 217,
+      "pred_mass": 51.26,
+      "actual_draws": 54,
+      "z": 0.38
+    },
+    {
+      "segment": "≥0.30（均势）",
+      "n": 65,
+      "pred_mass": 18.37,
+      "actual_draws": 16,
+      "z": -0.55
+    }
+  ],
+  "bins_before": [
+    {
+      "bin": "0.00-0.05",
+      "n": 2,
+      "pred_mass": 0.07,
+      "actual_draws": 0,
+      "z": -0.26
+    },
+    {
+      "bin": "0.05-0.10",
+      "n": 6,
+      "pred_mass": 0.48,
+      "actual_draws": 2,
+      "z": 2.2
+    },
+    {
+      "bin": "0.10-0.15",
+      "n": 15,
+      "pred_mass": 1.97,
+      "actual_draws": 2,
+      "z": 0.02
+    },
+    {
+      "bin": "0.15-0.20",
+      "n": 36,
+      "pred_mass": 6.41,
+      "actual_draws": 5,
+      "z": -0.56
+    },
+    {
+      "bin": "0.20-0.25",
+      "n": 82,
+      "pred_mass": 18.87,
+      "actual_draws": 18,
+      "z": -0.2
+    },
+    {
+      "bin": "0.25-0.30",
+      "n": 99,
+      "pred_mass": 27.43,
+      "actual_draws": 31,
+      "z": 0.68
+    },
+    {
+      "bin": "0.30-0.35",
+      "n": 49,
+      "pred_mass": 15.6,
+      "actual_draws": 11,
+      "z": -1.16
+    },
+    {
+      "bin": "0.35-0.40",
+      "n": 12,
+      "pred_mass": 4.41,
+      "actual_draws": 4,
+      "z": -0.2
+    },
+    {
+      "bin": "0.40-0.45",
+      "n": 1,
+      "pred_mass": 0.41,
+      "actual_draws": 0,
+      "z": -0.64
+    },
+    {
+      "bin": "0.50-0.55",
+      "n": 2,
+      "pred_mass": 1.07,
+      "actual_draws": 1,
+      "z": -0.06
+    },
+    {
+      "bin": "0.55-0.60",
+      "n": 1,
+      "pred_mass": 0.58,
+      "actual_draws": 0,
+      "z": -0.76
+    }
+  ],
+  "bins_after": [
+    {
+      "bin": "0.15-0.20",
+      "n": 56,
+      "pred_mass": 9.87,
+      "actual_draws": 9,
+      "z": -0.28
+    },
+    {
+      "bin": "0.20-0.25",
+      "n": 105,
+      "pred_mass": 24.08,
+      "actual_draws": 24,
+      "z": -0.02
+    },
+    {
+      "bin": "0.25-0.30",
+      "n": 144,
+      "pred_mass": 39.44,
+      "actual_draws": 41,
+      "z": 0.25
+    }
+  ]
+}

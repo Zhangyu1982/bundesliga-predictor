@@ -1,0 +1,27 @@
+{
+  "map": [
+    [
+      0.0,
+      0.16
+    ],
+    [
+      0.15,
+      0.165
+    ],
+    [
+      0.3,
+      0.28
+    ],
+    [
+      0.6,
+      0.3
+    ]
+  ],
+  "selection": "CV on 2324<->2425 (time-split), holdout 2526 untouched",
+  "fit_seasons": [
+    "2324",
+    "2425"
+  ],
+  "holdout": "2526",
+  "note": "输出层校准：只改 draw，主客同比例缩放；不改 rho/lambda，可 A/B 回滚"
+}
