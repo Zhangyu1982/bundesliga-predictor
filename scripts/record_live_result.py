@@ -19,6 +19,7 @@ bias.db 为运行时库（*.db 不入库，云端重建为空）；同时写入 
 """
 from __future__ import annotations
 import argparse
+import json
 import os
 import sys
 from datetime import datetime
@@ -94,6 +95,45 @@ def record(rec: dict, db_path: str = DB_PATH, live_path: str | None = None) -> i
     return n
 
 
+def _load_snapshot(season, round_no, snap_dir: str = "data/predictions") -> dict | None:
+    path = os.path.join(snap_dir, "{}_R{:02d}.json".format(season, int(round_no)))
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def resolve_shift(season, round_no, match_id, shift_home=None, shift_away=None,
+                  snap_dir: str = "data/predictions") -> dict:
+    """自动判定 shift 三态：只有"终极版 + 有首发"的快照才算 computed。
+
+    传了 --shift-computed 也不能绕过；不符合就降级为 unverified 并给出原因。
+    """
+    snap = _load_snapshot(season, round_no, snap_dir)
+    if not snap:
+        basis, reason = "unverified", "无预测快照（无法回查终极版/首发）"
+    else:
+        card = next((c for c in snap.get("cards", []) if c.get("match_id") == match_id), None)
+        if not card:
+            basis, reason = "unverified", "快照中无此场"
+        elif card.get("stage") != "终极版":
+            basis, reason = "unverified", "快照 stage={}".format(card.get("stage"))
+        elif not card.get("lineup_available"):
+            basis, reason = "unverified", "快照 lineup.available=False"
+        else:
+            basis, reason = "computed", "终极版 + 首发可用"
+            card_shift = card.get("injury_shift") or {}
+            if shift_home is None:
+                shift_home = card_shift.get("home")
+            if shift_away is None:
+                shift_away = card_shift.get("away")
+    if shift_home is None and shift_away is None:
+        basis, reason = None, "无 shift 值（未计算）"
+    return {"shift_home": shift_home, "shift_away": shift_away,
+            "basis": basis, "reason": reason}
+
+
 def _shift_basis(home, away, computed: bool):
     """三态：None=未计算；computed=算了且可信；unverified=有值但没声明来源。"""
     if home is None and away is None:
@@ -159,6 +199,11 @@ def main() -> None:
                             season, round_no,
                             kickoff_dt.isoformat())
 
+    sh = resolve_shift(season, round_no, args.match_id, args.shift_home, args.shift_away)
+    if args.shift_computed and sh["basis"] != "computed":
+        print(f"[shift] --shift-computed 被拒：{sh['reason']} → unverified")
+    if sh["basis"] == "unverified":
+        print(f"[shift] 本场 shift 记为 unverified：{sh['reason']}")
     rec = {
         "season": season,
         "round_no": round_no,
@@ -177,9 +222,10 @@ def main() -> None:
         "elo_dir": args.elo,
         "dc_dir": args.dc,
         "divergence": args.divergence,
-        "shift_home": args.shift_home,
-        "shift_away": args.shift_away,
-        "shift_basis": _shift_basis(args.shift_home, args.shift_away, args.shift_computed),
+        "shift_home": sh["shift_home"],
+        "shift_away": sh["shift_away"],
+        "shift_basis": sh["basis"],
+        "shift_reason": sh["reason"],
     }
     n = record(rec)
     # λ 滚动账：有 --lam-pred 就记一笔，用于"最近 N 场 Σλ vs Σ实际"的 z

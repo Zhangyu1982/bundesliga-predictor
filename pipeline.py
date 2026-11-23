@@ -6,6 +6,7 @@ P1 新增：灌入德甲历史 CSV 重训 Elo + Dixon-Coles + GBM（XGB+LGBM）�
 规则阈值全部取自 config.RULES；不在此硬编码。
 """
 from __future__ import annotations
+import json
 import math
 import os
 from datetime import datetime
@@ -1025,6 +1026,23 @@ class PredictionPipeline:
                 c["provisional_status"] = {
                     t: _pstatus(t, (meta or {}).get("season") or season_label(), expires_after_rounds=_exp)
                     for t in c["provisional_teams"]}
+        # 预测快照落盘：供入库时"回查这一场到底是不是终极版+有首发"（shift 三态的凭证）
+        try:
+            _snap_season = (meta or {}).get("season") or season_label()
+            _snap_dir = os.path.join("data", "predictions")
+            os.makedirs(_snap_dir, exist_ok=True)
+            _snap = {"season": _snap_season, "round": round_no, "competition": competition,
+                     "saved_at": datetime.now().isoformat(timespec="seconds"),
+                     "fixture_snapshot": snapshot,
+                     "cards": [{"match_id": c.get("match_id"), "stage": c.get("stage"),
+                                "lineup_available": bool((c.get("lineup") or {}).get("available")),
+                                "injury_shift": c.get("injury_shift"),
+                                "probabilities": c.get("probabilities")} for c in cards]}
+            _snap_path = os.path.join(_snap_dir, "{}_R{:02d}.json".format(_snap_season, int(round_no)))
+            with open(_snap_path, "w", encoding="utf-8") as _f:
+                json.dump(_snap, _f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
         return {
             "round": round_no, "competition": competition,
             "meta": meta,

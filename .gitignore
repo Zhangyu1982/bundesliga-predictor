@@ -33,3 +33,6 @@ data/roster_cache.json
 # P5.2 基线自动重建的互斥锁与状态文件（运行时生成，勿入库）
 data/.baseline_rebuild.lock
 data/.baseline_rebuild.json
+
+# 预测快照（运行时生成，入库判定 shift 三态用）
+data/predictions/
