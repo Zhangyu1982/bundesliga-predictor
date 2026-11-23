@@ -126,6 +126,21 @@ def round_coverage(fixtures, cover_codes) -> dict:
             "message": "赛程名单与模型覆盖不一致（缺 {}）".format("/".join(missing))}
 
 
+def view_margin(probs) -> tuple[float, bool]:
+    """返回 (top1−top2 间距, 是否"方向不明")。
+
+    判"有没有观点"要看**排序间距**，不是最大概率。0.351/0.328/0.320 间距 0.023 是真无观点；
+    0.40/0.35/0.25 最大值同样低，但排序里有信息。阈值起步 0.05，>=0.05 视为有方向。
+    """
+    if not probs:
+        return 0.0, True
+    vals = sorted((float(v) for v in probs.values()), reverse=True)
+    if len(vals) < 2:
+        return 0.0, True
+    margin = vals[0] - vals[1]
+    return margin, margin < 0.05
+
+
 def mark_param_flags(cards, fixtures, bundle, eng=None, season=None):
     """给每张卡片标注「临时参数队」与「降级回归、参数已衰减队」。
 
@@ -964,6 +979,10 @@ class PredictionPipeline:
             _fx = next((f for f in fixtures if f.get("match_id") == c.get("match_id")), {})
             mark_param_flags([c], fixtures, self._bundle, eng=self._eng,
                              season=(meta or {}).get("season"))
+            # 方向不明标注：靠 top1−top2 间距，不靠最大概率
+            _m, _flat = view_margin(c.get("probabilities"))
+            c["view_margin"] = round(_m, 4)
+            c["no_view"] = _flat
             # 到期状态：临时参数踢满 N 轮后必须能被"看见"该重估了
             if c["provisional_teams"]:
                 from data.param_status import status as _pstatus

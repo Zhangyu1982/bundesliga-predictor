@@ -112,6 +112,8 @@ def main() -> None:
     ap.add_argument("--pick", default=None, help="home_win / draw / away_win")
     ap.add_argument("--elo", default=None)
     ap.add_argument("--dc", default=None)
+    ap.add_argument("--lam-pred", type=float, default=None,
+                    help="赛前 λ 合计（期望总进球），用于 λ 滚动账")
     ap.add_argument("--divergence", type=int, default=0)
     ap.add_argument("--shift-home", type=float, default=None,
                     help="本场预测时的伤病偏移（主队，DC 攻击折扣口径）；用于 P0-1 有效性回测")
@@ -167,6 +169,17 @@ def main() -> None:
         "shift_away": args.shift_away,
     }
     n = record(rec)
+    # λ 滚动账：有 --lam-pred 就记一笔，用于"最近 N 场 Σλ vs Σ实际"的 z
+    if args.lam_pred is not None:
+        try:
+            from data import lambda_track
+            lambda_track.append([{
+                "match_id": args.match_id, "season": season, "round_no": round_no,
+                "lam_pred": args.lam_pred,
+                "actual_goals": (args.hg + args.ag) if (args.hg is not None and args.ag is not None) else None,
+            }])
+        except Exception as _e:
+            print(f"[lambda_track] 记账失败：{type(_e).__name__}")
     print(f"已写入 {n} 条：{season} R{round_no} {args.home} vs {args.away} "
           f"实际 {args.hg}-{args.ag} ({args.ftr}) · 预测首选 {args.pick} · 命中 "
           f"{_auto_pred_hit(args.pick, args.ftr)}")

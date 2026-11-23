@@ -944,6 +944,9 @@ if st.button("生成预测", type="primary", disabled=ss.get("_running", False))
                              .format(" / ".join(_expired),
                                      (c.get("provisional_status") or {}).get(_expired[0], {})
                                      .get("expires_after_rounds", 10)))
+            if c.get("no_view"):
+                st.caption("🎯 **方向不明**（首选与次选间距仅 {:.3f}）：三分类接近均分时不做方向推荐。"
+                           .format(float(c.get("view_margin") or 0)))
             _carry = c.get("carryover_teams") or []
             if _carry:
                 st.info("♻️ **本场含降级回归球队：{}**　参数保留其上次德甲赛季的检验值，"

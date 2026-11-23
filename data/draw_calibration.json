@@ -1,0 +1,108 @@
+{
+  "bin_width": 0.05,
+  "overall": {
+    "n": 825,
+    "actual_draw_rate": 0.2533,
+    "mean_pred_draw": 0.2388
+  },
+  "walkforward_n": 807,
+  "live_n": 18,
+  "table": [
+    {
+      "bin": "0.00-0.05",
+      "bin_lo": 0.0,
+      "n": 30,
+      "mean_pred_draw": 0.021,
+      "actual_draw_rate": 0.1333,
+      "gap_rate_minus_pred": 0.1123
+    },
+    {
+      "bin": "0.05-0.10",
+      "bin_lo": 0.05,
+      "n": 28,
+      "mean_pred_draw": 0.0753,
+      "actual_draw_rate": 0.2143,
+      "gap_rate_minus_pred": 0.139
+    },
+    {
+      "bin": "0.10-0.15",
+      "bin_lo": 0.1,
+      "n": 45,
+      "mean_pred_draw": 0.1258,
+      "actual_draw_rate": 0.2,
+      "gap_rate_minus_pred": 0.0742
+    },
+    {
+      "bin": "0.15-0.20",
+      "bin_lo": 0.15,
+      "n": 115,
+      "mean_pred_draw": 0.1763,
+      "actual_draw_rate": 0.1739,
+      "gap_rate_minus_pred": -0.0024
+    },
+    {
+      "bin": "0.20-0.25",
+      "bin_lo": 0.2,
+      "n": 192,
+      "mean_pred_draw": 0.2284,
+      "actual_draw_rate": 0.2969,
+      "gap_rate_minus_pred": 0.0685
+    },
+    {
+      "bin": "0.25-0.30",
+      "bin_lo": 0.25,
+      "n": 249,
+      "mean_pred_draw": 0.2744,
+      "actual_draw_rate": 0.2932,
+      "gap_rate_minus_pred": 0.0188
+    },
+    {
+      "bin": "0.30-0.35",
+      "bin_lo": 0.3,
+      "n": 119,
+      "mean_pred_draw": 0.32,
+      "actual_draw_rate": 0.2353,
+      "gap_rate_minus_pred": -0.0847
+    },
+    {
+      "bin": "0.35-0.40",
+      "bin_lo": 0.35,
+      "n": 41,
+      "mean_pred_draw": 0.3663,
+      "actual_draw_rate": 0.2683,
+      "gap_rate_minus_pred": -0.098
+    },
+    {
+      "bin": "0.40-0.45",
+      "bin_lo": 0.4,
+      "n": 2,
+      "mean_pred_draw": 0.4129,
+      "actual_draw_rate": 0.0,
+      "gap_rate_minus_pred": -0.4129
+    },
+    {
+      "bin": "0.50-0.55",
+      "bin_lo": 0.5,
+      "n": 2,
+      "mean_pred_draw": 0.5335,
+      "actual_draw_rate": 0.5,
+      "gap_rate_minus_pred": -0.0335
+    },
+    {
+      "bin": "0.55-0.60",
+      "bin_lo": 0.55,
+      "n": 1,
+      "mean_pred_draw": 0.5788,
+      "actual_draw_rate": 0.0,
+      "gap_rate_minus_pred": -0.5788
+    },
+    {
+      "bin": "0.60-0.65",
+      "bin_lo": 0.6,
+      "n": 1,
+      "mean_pred_draw": 0.6105,
+      "actual_draw_rate": 0.0,
+      "gap_rate_minus_pred": -0.6105
+    }
+  ]
+}
