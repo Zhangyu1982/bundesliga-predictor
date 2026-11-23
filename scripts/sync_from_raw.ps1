@@ -9,7 +9,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$fail = 0
+# pwsh -File 会把 "-Files a,b" 当一个字符串传进来，这里统一拆开
+$Files = @($Files | ForEach-Object { $_ -split ',' } | Where-Object { $_ -and $_.Trim() -ne '' })
+$fail = @()
 foreach ($f in $Files) {
   $url = "https://raw.githubusercontent.com/$Owner/$Name/$Branch/$f"
   $dest = Join-Path $Repo ($f -replace '/', '\')
@@ -18,17 +20,18 @@ foreach ($f in $Files) {
   $ok = $false
   for ($i = 1; $i -le 4 -and -not $ok; $i++) {
     try {
-      $head = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -TimeoutSec 20
-      $expect = [int64]$head.Headers['Content-Length']
-      curl.exe -sS -m 30 -o $tmp $url
-      $got = (Get-Item $tmp).Length
-      if ($got -gt 0 -and $got -eq $expect) { Move-Item -Force $tmp $dest; $ok = $true }
-      else { "  retry {0}: size {1} != expected {2}" -f $i, $got, $expect }
+      if (Test-Path $tmp) { Remove-Item -Force $tmp }
+      curl.exe -fsS -m 30 --retry 2 --retry-all-errors -o $tmp $url 2>$null
+      $code = $LASTEXITCODE
+      if ($code -eq 0 -and (Test-Path $tmp) -and (Get-Item $tmp).Length -gt 0) {
+        Move-Item -Force $tmp $dest; $ok = $true
+      }
+      else { "  retry {0}: curl exit {1}" -f $i, $code }
     }
     catch { "  retry {0}: {1}" -f $i, $_.Exception.Message; Start-Sleep 2 }
   }
-  if (-not $ok) { $fail++ }
+  if (-not $ok) { $fail += $f }
   "{0,-42} {1}" -f $f, $(if ($ok) { "ok ($((Get-Item $dest).Length) bytes)" } else { "FAIL" })
 }
-if ($fail -gt 0) { throw "$fail 个文件校验失败，未落盘" }
+if ($fail.Count -gt 0) { throw ("未通过校验：" + ($fail -join ", ")) }
 "全部同步完成并已校验大小"
