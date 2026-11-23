@@ -8,23 +8,23 @@
   "carryover_teams": [],
   "stats": {
     "all": {
-      "n": 11,
-      "hits": 8,
-      "hit_rate": 0.7272727272727273,
+      "n": 20,
+      "hits": 13,
+      "hit_rate": 0.65,
       "insufficient": false,
       "min_n": 10
     },
     "stable": {
-      "n": 8,
-      "hits": 6,
-      "hit_rate": 0.75,
-      "insufficient": true,
+      "n": 14,
+      "hits": 10,
+      "hit_rate": 0.7142857142857143,
+      "insufficient": false,
       "min_n": 10
     },
     "provisional": {
-      "n": 3,
-      "hits": 2,
-      "hit_rate": 0.6666666666666666,
+      "n": 6,
+      "hits": 3,
+      "hit_rate": 0.5,
       "insufficient": true,
       "min_n": 10
     },
