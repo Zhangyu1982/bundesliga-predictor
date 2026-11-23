@@ -12,6 +12,30 @@ def _write(dirp, season, rnd, cards):
         json.dump({"season": season, "round": rnd, "cards": cards}, f)
 
 
+def _write_stage(dirp, season, rnd, tag, cards):
+    os.makedirs(dirp, exist_ok=True)
+    p = os.path.join(dirp, "{}_R{:02d}_{}.json".format(season, rnd, tag))
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump({"season": season, "round": rnd, "stage": tag, "cards": cards}, f)
+
+
+def test_final_stage_survives_later_initial_rerun(tmp_path):
+    # 同轮先终极版、后又点初版：终极版快照不被覆盖，入库仍算 computed
+    _write_stage(str(tmp_path), "2627", 11, "终极版", [
+        {"match_id": "M9", "stage": "终极版", "lineup_available": True, "injury_shift": {"home": 0.0, "away": 0.0}}])
+    _write_stage(str(tmp_path), "2627", 11, "初版", [
+        {"match_id": "M9", "stage": "初版", "lineup_available": False, "injury_shift": None}])
+    r = resolve_shift("2627", 11, "M9", snap_dir=str(tmp_path))
+    assert r["basis"] == "computed" and r["shift_home"] == 0.0
+
+
+def test_only_initial_stage_still_unverified(tmp_path):
+    _write_stage(str(tmp_path), "2627", 11, "初版", [
+        {"match_id": "M8", "stage": "初版", "lineup_available": True, "injury_shift": {"home": 0.1}}])
+    r = resolve_shift("2627", 11, "M8", 0.1, None, snap_dir=str(tmp_path))
+    assert r["basis"] == "unverified" and "初版" in r["reason"]
+
+
 def test_computed_only_for_final_stage_with_lineup(tmp_path):
     _write(str(tmp_path), "2627", 11, [
         {"match_id": "M1", "stage": "终极版", "lineup_available": True, "injury_shift": {"home": 0.0, "away": 0.1}},

@@ -1031,14 +1031,19 @@ class PredictionPipeline:
             _snap_season = (meta or {}).get("season") or season_label()
             _snap_dir = os.path.join("data", "predictions")
             os.makedirs(_snap_dir, exist_ok=True)
-            _snap = {"season": _snap_season, "round": round_no, "competition": competition,
+            _snap = {"season": _snap_season, "round": round_no, "stage": _stage_tag,
+                     "competition": competition,
                      "saved_at": datetime.now().isoformat(timespec="seconds"),
                      "fixture_snapshot": snapshot,
                      "cards": [{"match_id": c.get("match_id"), "stage": c.get("stage"),
                                 "lineup_available": bool((c.get("lineup") or {}).get("available")),
                                 "injury_shift": c.get("injury_shift"),
                                 "probabilities": c.get("probabilities")} for c in cards]}
-            _snap_path = os.path.join(_snap_dir, "{}_R{:02d}.json".format(_snap_season, int(round_no)))
+            # 文件名带 stage：同轮重跑（终极版→又点初版）不会互相覆盖，入库优先取终极版
+            _stage_tag = next((x for x in ("终极版", "确认版", "初版")
+                              if any(c.get("stage") == x for c in cards)), "初版")
+            _snap_path = os.path.join(
+                _snap_dir, "{}_R{:02d}_{}.json".format(_snap_season, int(round_no), _stage_tag))
             with open(_snap_path, "w", encoding="utf-8") as _f:
                 json.dump(_snap, _f, ensure_ascii=False, indent=2)
         except Exception:

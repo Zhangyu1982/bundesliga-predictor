@@ -95,7 +95,19 @@ def record(rec: dict, db_path: str = DB_PATH, live_path: str | None = None) -> i
     return n
 
 
+_STAGE_ORDER = ("终极版", "确认版", "初版")
+
+
 def _load_snapshot(season, round_no, snap_dir: str = "data/predictions") -> dict | None:
+    """按 stage 优先取快照文件：终极版 > 确认版 > 初版 > 旧的无 stage 文件。"""
+    for tag in _STAGE_ORDER:
+        path = os.path.join(snap_dir, "{}_R{:02d}_{}.json".format(season, int(round_no), tag))
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f)
+            except (OSError, ValueError):
+                continue
     path = os.path.join(snap_dir, "{}_R{:02d}.json".format(season, int(round_no)))
     try:
         with open(path, encoding="utf-8") as f:
