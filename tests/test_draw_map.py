@@ -56,3 +56,26 @@ def test_shadow_log_written_without_touching_probs(tmp_path, monkeypatch):
     rec = json.loads(open(os.path.join("logs", "draw_shadow.jsonl"), encoding="utf-8").read().splitlines()[0])
     assert rec["base"] == {"home_win": 0.7, "draw": 0.1, "away_win": 0.2}
     assert rec["recal"]["draw"] > rec["base"]["draw"]
+
+
+def test_recal_is_declared_closed():
+    import config
+    assert config.DRAW_RECAL is False
+    assert config.DRAW_RECAL_STATUS == "closed"
+
+
+def test_shadow_log_rotates_after_expiry(tmp_path, monkeypatch):
+    import os
+    import time
+    import pipeline
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("logs")
+    path = os.path.join("logs", "draw_shadow.jsonl")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('{"old": 1}\n')
+    old = time.time() - 40 * 86400
+    os.utime(path, (old, old))
+    pipeline.PredictionPipeline._shadow_draw("BUN_T2", {"home_win": 0.7, "draw": 0.1, "away_win": 0.2}, "2627")
+    rotated = [f for f in os.listdir("logs") if f.startswith("draw_shadow.") and f.endswith(".jsonl")]
+    assert rotated, "超期日志应被轮转"
+    assert os.path.exists(path), "轮转后应新建当前日志"

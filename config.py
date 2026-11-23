@@ -19,8 +19,13 @@ HOME_ADV = 50             # Elo 主场优势（网格搜索定值）
 ELO_K = 15                # Elo 步长
 DC_DECAY = 0.03           # Dixon-Coles 时间衰减系数
 DC_RHO = -0.20
-DRAW_RECAL = False        # 平局输出层校准开关（A/B）；映射锚点见 data/draw_map.json
-DRAW_SHADOW = False       # 影子模式：后台算两套只记日志（logs/draw_shadow.jsonl），展示仍用原概率
+# 平局输出层重校准：已关闭（2026-11-23 判定）。
+# 依据：2526 ΔBrier -0.00212，sd 0.0634；要让 95% CI 不跨 0 需 n>3400 场（约 10 赛季），
+# 30 场时 CI 半宽 ≈0.023（效应量的 11 倍）。重启条件：累计样本 ≥300 场且效应量 ≥0.01。
+DRAW_RECAL = False
+DRAW_RECAL_STATUS = "closed"   # 仅供展示/自证，勿据此开开关
+DRAW_SHADOW = False            # 影子模式：只记日志不展示；默认关
+DRAW_SHADOW_EXPIRE_DAYS = 30   # 影日志有效期，超期轮转（draw_shadow.YYYYMMDD.jsonl）
 # 集成权重（liveljack 最优配比）
 ENSEMBLE_WEIGHTS = {
     "elo": 0.15,

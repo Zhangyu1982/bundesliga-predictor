@@ -11,7 +11,7 @@ import os
 from datetime import datetime
 from data.timeutil import season_label
 from config import (RULES, SEASON, ENSEMBLE_WEIGHTS, uncalibrated_thresholds,
-                    FATIGUE_RULES, LUCK_REGRESSION, HOME_ADV, DRAW_RECAL, DRAW_SHADOW)
+                    FATIGUE_RULES, LUCK_REGRESSION, HOME_ADV, DRAW_RECAL, DRAW_SHADOW, DRAW_RECAL_STATUS, DRAW_SHADOW_EXPIRE_DAYS)
 from schema import validate_probs, validate_stage_window
 from data.api_client import resolve_provider, team_zh
 from data.historical_data import CODE2ENG
@@ -298,11 +298,17 @@ class PredictionPipeline:
             import json as _json
             from data.draw_map import recalibrate_draw
             os.makedirs("logs", exist_ok=True)
+            path = os.path.join("logs", "draw_shadow.jsonl")
+            # 有效期：超过 DRAW_SHADOW_EXPIRE_DAYS 就轮转，避免攒一份没人用的日志
+            if os.path.exists(path) and \
+                    (datetime.now() - datetime.fromtimestamp(os.path.getmtime(path))).days >= DRAW_SHADOW_EXPIRE_DAYS:
+                _stamp = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y%m%d")
+                os.rename(path, os.path.join("logs", "draw_shadow.{}.jsonl".format(_stamp)))
             rec = {"match_id": match_id, "season": season,
                    "base": {k: round(float(probs[k]), 4) for k in ("home_win", "draw", "away_win")}}
             rec["recal"] = {k: round(float(v), 4) for k, v in recalibrate_draw(probs).items()
                             if k in ("home_win", "draw", "away_win")}
-            with open(os.path.join("logs", "draw_shadow.jsonl"), "a", encoding="utf-8") as f:
+            with open(path, "a", encoding="utf-8") as f:
                 f.write(_json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception:
             pass
@@ -1010,6 +1016,7 @@ class PredictionPipeline:
             c["no_view"] = _flat
             # A/B 归因：卡片上带开关状态；影子模式只记账不展示
             c["draw_recal"] = bool(DRAW_RECAL)
+            c["draw_recal_status"] = DRAW_RECAL_STATUS
             if DRAW_SHADOW:
                 self._shadow_draw(c.get("match_id"), c.get("probabilities"), (meta or {}).get("season"))
             # 到期状态：临时参数踢满 N 轮后必须能被"看见"该重估了
